@@ -6,9 +6,13 @@ Version : 9.0   Compatible with Hardware Schematic V9
 Change Record
 24/10/2022  1.0 First Release
 17/11/2022  9.0 Wipe SD Button added, Wipe SD Functionality added to Webpage
+09/12/2022  9.1 Webpage Graphs now display 1 to 50Amps
+10/12/2022  9.2 Webpage Reset function added
 */
+String version = "V9.2";                                // software version number, shown on webpage
 // compilation switches -----------------------------------------------------------------------------------------------
 //#define VERBOSE       // Remove the // at the start of this line to print out on the console the annotated value from the KWS-AC301L
+#define DEBUG           // display messages on console
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -130,11 +134,11 @@ double RS485_Values[9] = {
 };
 bool started = false;                                   // used to indicate run switch has been pressed and readings are being taken
 bool booted = false;
-String version = "V1.0";                                // software version number, shown on webpage
+
 String site_width = "1060";                             // width of web page
 String site_height = "600";                             // height of web page
 int const table_size = 72;
-int       record_count, log_count;
+int       record_count, current_record_count;
 String    webpage, lastcall;
 String Last_Boot_Date = "11/11/2022 12:12:12";
 typedef struct {
@@ -165,9 +169,11 @@ void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
     while (!console);                                                                    // wait for port to settle
     delay(4000);
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\tCommencing Setup");                // print start message
     console.print(millis(), DEC);
     console.println("\t\t1. Initialising Switches and LEDs");                           // initialising Switches and LEDs
+#endif
     pinMode(Start_switch_pin, INPUT_PULLUP);
     pinMode(Reset_switch_pin, INPUT_PULLUP);
     pinMode(WipeSD_switch_pin, INPUT_PULLUP);
@@ -186,19 +192,27 @@ void setup() {
     SD_switch.update();
     digitalWrite(Running_led_pin, LOW);
     digitalWrite(SD_Active_led_pin, LOW);
+#ifdef DEBUG
     console.print(millis(), DEC);
     console.println("\t\t\tSwitches and LEDs Initialised");
     // WiFi and Web Setup -------------------------------------------------------------------------
     console.print(millis(), DEC); console.println("\t\t2. Starting WiFi");
+#endif
     StartWiFi(ssid, password);                      // Start WiFi
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\t\t\tWiFi Started");
     console.print(millis(), DEC); console.println("\t\t3. Starting Time Server");
+#endif
     StartTime();                                    // Start Time
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\t\t\tTime Started");
     console.print(millis(), DEC); console.println("\t\t4. Starting Web Server");
+#endif
     server.begin();                                 // Start Webserver
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\t\t\tServer Started");
     console.print(millis(), DEC); console.print("\t\t\tWiFi IP Address: "); console.println(WiFi.localIP());
+#endif
     server.on("/", Display);
     server.on("/Start", Start_Readings);
     server.on("/Display", Display);
@@ -210,23 +224,29 @@ void setup() {
     server.on("/DelFile", Del_File);                        // delete the selected file
     server.on("/AverageFiles", Average_Files);            // display hourly analysis of current file
     server.on("/AverageFile", Average_File);              // analysis the selected file
+    server.on("/Reset", Web_Reset);
     server.begin();
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\t\t\tWebserver started");
     // RS485 Setup --------------------------------------------------------------------------------
     console.print(millis(), DEC); console.println("\t\t5. Initialising RS485 Interface");
+#endif
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
+#ifdef DEBUG
     console.print(millis(), DEC); console.println("\t\t\tRS485 Interface Initialised");
-    // SD Setup -----------------------------------------------------------------------------------
-    digitalWrite(SD_Active_led_pin, HIGH);
     console.print(millis(), DEC); console.println("\t\t6. SD Drive Configuration");
     console.print(millis(), DEC); console.print("\t\t\tSS pin:["); console.print(SS); console.println("]");
     console.print(millis(), DEC); console.print("\t\t\tMOSI pin:["); console.print(MOSI); console.println("]");
     console.print(millis(), DEC); console.print("\t\t\tMISO pin:["); console.print(MISO); console.println("]");
     console.print(millis(), DEC); console.print("\t\t\tSCK pin:["); console.print(SCK); console.println("]");
+#endif
+    digitalWrite(SD_Active_led_pin, HIGH);
     if (!SD.begin(SS_pin)) {
+#ifdef DEBUG
         console.print(millis(), DEC); console.println("\t\tSD Drive Begin Failed @ line 212");
+#endif
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -235,10 +255,14 @@ void setup() {
         }
     }
     else {
+#ifdef DEBUG
         console.print(millis(), DEC); console.println("\t\t\tSD Drive Begin Succeeded");
+#endif
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
+#ifdef DEBUG
             console.print(millis(), DEC); console.println("\t\tNo SD card attached @ line 224");
+#endif
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -246,6 +270,7 @@ void setup() {
                 Check_Reset_Switch();
             }
         }
+#ifdef DEBUG
         console.print(millis(), DEC); console.print("\t\t\tSD Card Type: ");
         if (cardType == CARD_MMC) {
             console.println("MMC");
@@ -259,23 +284,30 @@ void setup() {
         else {
             console.println("UNKNOWN");
         }
+#endif
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-        console.print(millis(), DEC); console.print("\t\t\tSD Card Size: "); console.print(cardSize); console.println("MBytes");
         critical_SD_freespace = cardSize * (uint64_t).9;
+#ifdef DEBUG
+        console.print(millis(), DEC); console.print("\t\t\tSD Card Size: "); console.print(cardSize); console.println("MBytes");
         console.print(millis(), DEC); console.print("\t\t\tTotal Bytes: "); console.println(SD.totalBytes());
         console.print(millis(), DEC); console.print("\t\t\tUsed bytes: "); console.println(SD.usedBytes());
         console.print(millis(), DEC); console.println("\t\t\tSD Card Initialisation Complete");
         console.print(millis(), DEC); console.println("\t\t\tCreate Logging File");
+#endif
     }
-    Last_Boot_Date = GetDate(true) + GetTime(true);
+    Last_Boot_Date = GetDate(true) + " " + GetTime(true);
     This_Date = GetDate(false);
     RS485FileName = GetDate(false) + ".csv";
+#ifdef DEBUG
     console.print(millis(), DEC); console.print("\t\t\tRS485 File Created: "); console.println(RS485FileName);
+#endif
     if (!SD.exists("/" + RS485FileName)) {
         RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
         if (!RS485file) {                                     // log file not opened
+#ifdef DEBUG
             console.print(millis(), DEC);
             console.print("\t\tError opening RS485file: @ line 278 ["); console.print(RS485FileName); console.println("]");
+#endif           
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -292,6 +324,7 @@ void setup() {
         RS485file.println(RS485_FieldNames[8]);
         RS485file.close();
         RS485file.flush();
+        current_record_count = 0;
         digitalWrite(SD_Active_led_pin, LOW);
         console.print(millis(), DEC); console.println("\t\t\tRS485 File Created");
     }
@@ -310,150 +343,162 @@ void loop() {
     Check_SD_Switch();                                              // check if wipesd switch has been pressed
     Drive_Running_Led();                                            // on when started, flashing when not, flashing with SD led if waiting for reset
     server.handleClient();                                          // handle any messages from the website
-    if (started) {
-        String now;
+    if (started) {                                                  // user has started the readings
         if (millis() > last_sensor_read + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
-            last_sensor_read = millis();
+            last_sensor_read = millis();                            // update the last read milli second reading  
             for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
                 Send_Request(i);                                    // send the RS485 Port the requests, one by one
                 RS485_Values[i] = Receive(i);                       // get the reply
             }                                                       // all values should now be populated
             RS485_Date = GetDate(true);                             // get the date of the reading
             RS485_Time = GetTime(true);                             // get the time of the reading
-            // RS485 File Record Addition ----------------------------------------------------------------------------------------
-            digitalWrite(SD_Active_led_pin, HIGH);                  // turn the SD activity LED on
             if (This_Date != GetDate(false)) {                      // has date changed
-                RS485FileName = GetDate(false) + ".csv";            // yes, so create a new file
-                console.print(millis(), DEC);
-                console.print("\t\t\tRS485 File Created: ");
-                console.println(RS485FileName);
-                record_count = 0;
-                log_count = 0;
-                largest_amperage = 0;
-                if (!SD.exists("/" + RS485FileName)) {
-                    RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
-                    if (!RS485file) {                                     // log file not opened
-                        console.print(millis(), DEC);
-                        console.print("\t\tError opening RS485file: [");
-                        console.print(RS485FileName); console.println("]");
-                        while (true) {
-                            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-                            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-                            delay(500);
-                            Check_Reset_Switch();
-                        }
-                    }
-                    RS485file.print("Date,");                           // write first column header
-                    RS485file.print("Time,");                           // write second column header
-                    for (int x = 0; x < 8; x++) {                       // write data column headings into the SD file
-                        RS485file.print(RS485_FieldNames[x]);
-                        RS485file.print(",");
-                    }
-                    RS485file.println(RS485FileName[8]);
-                    RS485file.close();
-                    RS485file.flush();
-                    console.print(millis(), DEC); console.println("\t\t\tRS485 File Created");
-                }
+                Create_New_RS485_Data_File();                       // so create a new Data File with new file name
             }
-            RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
-            if (!RS485file) {                                                               // oops - file not available!
-                console.print(millis(), DEC);
-                console.print("\t\tError re-opening RS485file:");
-                console.println(RS485FileName);
-                while (true) {
-                    digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-                    digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-                    delay(500);
-                    Check_Reset_Switch();                                                   // Reset will restart the processor so no return
-                }
+            Write_New_RS485_Record_to_Data_File();                  // write the new record to SD Drive
+            Add_New_RS485_Record_to_Display_Table();                // add the record to the display table
+        }                                                           // end of if millis >5000
+    }                                                               // end of if started
+}                                                                   // end of loop
+void Create_New_RS485_Data_File() {
+    digitalWrite(SD_Active_led_pin, HIGH);              // turn the SD activity LED on
+    RS485FileName = GetDate(false) + ".csv";            // yes, so create a new file
+    console.print(millis(), DEC);
+    console.print("\t\t\tRS485 File Created: ");
+    console.println(RS485FileName);
+
+    if (!SD.exists("/" + RS485FileName)) {
+        RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
+        if (!RS485file) {                                     // log file not opened
+            console.print(millis(), DEC);
+            console.print("\t\tError opening RS485file: [");
+            console.print(RS485FileName); console.println("]");
+            while (true) {
+                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+                delay(500);
+                Check_Reset_Switch();
             }
-            SD_freespace = (SD.totalBytes() - SD.usedBytes());
-            RS485file.print(RS485_Date); RS485file.print(",");          // dd/mm/yyyy,
-            RS485file.print(RS485_Time); RS485file.print(",");          // dd/mm/yyyy,hh:mm:ss,
-            SDprintDouble(RS485_Values[0], 1); RS485file.print(",");    // voltage
-            SDprintDouble(RS485_Values[1], 3); RS485file.print(",");    // amperage
-            SDprintDouble(RS485_Values[2], 2); RS485file.print(",");    // wattage
-            SDprintDouble(RS485_Values[3], 1); RS485file.print(",");    // up time
-            SDprintDouble(RS485_Values[4], 3); RS485file.print(",");    // kilowatt hour
-            SDprintDouble(RS485_Values[5], 2); RS485file.print(",");    // power factor
-            SDprintDouble(RS485_Values[6], 1); RS485file.print(",");    // unknown
-            SDprintDouble(RS485_Values[7], 1); RS485file.print(",");    // frequency
-            SDprintDouble(RS485_Values[8], 1);                          // temperature
-            RS485file.print("\n");                                      // end of record
-            RS485file.close();                                          // close the sd file
-            RS485file.flush();                                          // make sure it has been written to SD
-            digitalWrite(SD_Active_led_pin, LOW);
-            if (RS485_Values[1] >= largest_amperage) {                  // load the maximum amperage value
-                for (i = 0; i <= RS485_Date.length() + 1; i++) {                              // load the date
-                    date_of_largest_amperage[i] = RS485_Date[i];
-                }
-                for (i = 0; i <= RS485_Time.length() + 1; i++) {                               // load the time
-                    time_of_largest_amperage[i] = RS485_Time[i];
-                }
-                largest_amperage = RS485_Values[1];                     // update the largest current value
-            }
-            SD_freespace_double = (double)SD_freespace / 1000000;
-            if (SD_freespace < critical_SD_freespace) {
-                console.print(millis(), DEC);
-                console.print("\tWARNING - SD Free Space critical ");
-                console.print(SD_freespace); console.println("MB");
-            }
-            record_count++;                                             // increment the record count, the array pointer
-            log_count++;
-            //                                                          // add the record to the webpage display array
-            if (record_count > table_size) {                            // table full, shuffle fifo
-                record_count = table_size;
-                for (i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
-                    strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
-                    strcpy(readings_table[i].ltime, readings_table[i + 1].ltime);           // time
-                    readings_table[i].voltage = readings_table[i + 1].voltage;              // voltage
-                    readings_table[i].amperage = readings_table[i + 1].amperage;            // amperage
-                    readings_table[i].wattage = readings_table[i + 1].wattage;              // wattage
-                    readings_table[i].uptime = readings_table[i + 1].uptime;                // up time
-                    readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;    // kilowatt hour
-                    readings_table[i].powerfactor = readings_table[i + 1].powerfactor;      // power factor
-                    readings_table[i].unknown = readings_table[i + 1].unknown;              // unknown
-                    readings_table[i].frequency = readings_table[i + 1].frequency;          // frequency
-                    readings_table[i].temperature = readings_table[i + 1].temperature;      // temperature
-                }
-                record_count = table_size;                                                  // subsequent records will be added at the end of the table
-                for (i = 0; i <= RS485_Date.length() + 1; i++) {
-                    readings_table[table_size].ldate[i] = RS485_Date[i];
-                }                                                                           // write the new reading to the end of the table
-                for (i = 0; i <= RS485_Time.length() + 1; i++) {
-                    readings_table[table_size].ltime[i] = RS485_Time[i];
-                }
-                readings_table[table_size].voltage = RS485_Values[Voltage];
-                readings_table[table_size].amperage = RS485_Values[Amperage];
-                readings_table[table_size].wattage = RS485_Values[Wattage];                 // write the watts value into the table
-                readings_table[table_size].uptime = RS485_Values[UpTime];
-                readings_table[table_size].kilowatthour = RS485_Values[Kilowatthour];
-                readings_table[table_size].powerfactor = RS485_Values[PowerFactor];
-                readings_table[table_size].unknown = RS485_Values[Unknown];
-                readings_table[table_size].frequency = RS485_Values[Frequency];
-                readings_table[table_size].temperature = RS485_Values[Temperature];
-            }
-            else {
-                for (i = 0; i <= RS485_Date.length() + 1; i++) {
-                    readings_table[record_count].ldate[i] = RS485_Date[i];
-                }                                                                         // write the new reading to the end of the table
-                for (i = 0; i <= RS485_Time.length() + 1; i++) {
-                    readings_table[record_count].ltime[i] = RS485_Time[i];
-                }
-                readings_table[record_count].voltage = RS485_Values[Voltage];
-                readings_table[record_count].amperage = RS485_Values[Amperage];
-                readings_table[record_count].wattage = RS485_Values[Wattage];
-                readings_table[record_count].uptime = RS485_Values[UpTime];
-                readings_table[record_count].kilowatthour = RS485_Values[Kilowatthour];
-                readings_table[record_count].powerfactor = RS485_Values[PowerFactor];
-                readings_table[record_count].unknown = RS485_Values[Unknown];
-                readings_table[record_count].frequency = RS485_Values[Frequency];
-                readings_table[record_count].temperature = RS485_Values[Temperature];
-            }                                                                           // end of if record_count > table_size
-            console.print(millis(), DEC); console.println("\t\t10. Record Written");
-        }                                                                               // end of if millis >5000
-    }                                                                                    // end of if started
-}                                                                                       // end of loop
+        }
+        RS485file.print("Date,");                           // write first column header
+        RS485file.print("Time,");                           // write second column header
+        for (int x = 0; x < 8; x++) {                       // write data column headings into the SD file
+            RS485file.print(RS485_FieldNames[x]);
+            RS485file.print(",");
+        }
+        RS485file.println(RS485FileName[8]);
+        RS485file.close();
+        RS485file.flush();
+        record_count = 0;                                   // zero the pointer used by the display table
+        largest_amperage = 0;                               // zero the record of the greatest amperage
+        current_record_count = 0;                           // zero the count because this is a new file
+        console.print(millis(), DEC);
+        console.println("\t\t\tRS485 File Created");
+    }
+    digitalWrite(SD_Active_led_pin, LOW);                  // turn the SD activity LED off
+}
+void Write_New_RS485_Record_to_Data_File() {
+    digitalWrite(SD_Active_led_pin, HIGH);                  // turn the SD activity LED on
+    RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
+    if (!RS485file) {                                           // oops - file not available!
+        console.print(millis(), DEC);
+        console.print("\t\tError re-opening RS485file:");
+        console.println(RS485FileName);
+        while (true) {
+            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+            delay(500);
+            Check_Reset_Switch();                                                   // Reset will restart the processor so no return
+        }
+    }
+    SD_freespace = (SD.totalBytes() - SD.usedBytes());
+    RS485file.print(RS485_Date); RS485file.print(",");          // dd/mm/yyyy,
+    RS485file.print(RS485_Time); RS485file.print(",");          // dd/mm/yyyy,hh:mm:ss,
+    SDprintDouble(RS485_Values[0], 1); RS485file.print(",");    // voltage
+    SDprintDouble(RS485_Values[1], 3); RS485file.print(",");    // amperage
+    SDprintDouble(RS485_Values[2], 2); RS485file.print(",");    // wattage
+    SDprintDouble(RS485_Values[3], 1); RS485file.print(",");    // up time
+    SDprintDouble(RS485_Values[4], 3); RS485file.print(",");    // kilowatt hour
+    SDprintDouble(RS485_Values[5], 2); RS485file.print(",");    // power factor
+    SDprintDouble(RS485_Values[6], 1); RS485file.print(",");    // unknown
+    SDprintDouble(RS485_Values[7], 1); RS485file.print(",");    // frequency
+    SDprintDouble(RS485_Values[8], 1);                          // temperature
+    RS485file.print("\n");                                      // end of record
+    RS485file.close();                                          // close the sd file
+    RS485file.flush();                                          // make sure it has been written to SD
+    digitalWrite(SD_Active_led_pin, LOW);
+    if (RS485_Values[1] >= largest_amperage) {                  // load the maximum amperage value
+        for (i = 0; i <= RS485_Date.length() + 1; i++) {                              // load the date
+            date_of_largest_amperage[i] = RS485_Date[i];
+        }
+        for (i = 0; i <= RS485_Time.length() + 1; i++) {                               // load the time
+            time_of_largest_amperage[i] = RS485_Time[i];
+        }
+        largest_amperage = RS485_Values[1];                     // update the largest current value
+    }
+    SD_freespace_double = (double)SD_freespace / 1000000;
+    if (SD_freespace < critical_SD_freespace) {
+        console.print(millis(), DEC);
+        console.print("\tWARNING - SD Free Space critical ");
+        console.print(SD_freespace); console.println("MB");
+    }
+    record_count++;                                             // increment the record count, the array pointer
+    current_record_count++;                                     // increment the current record count
+    digitalWrite(SD_Active_led_pin, LOW);                  // turn the SD activity LED on
+    console.print(millis(), DEC); console.println("\t\t10. Record Added to Data File");
+}
+void Add_New_RS485_Record_to_Display_Table() {
+    if (record_count > table_size) {                            // table full, shuffle fifo
+        record_count = table_size;
+        for (i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
+            strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
+            strcpy(readings_table[i].ltime, readings_table[i + 1].ltime);           // time
+            readings_table[i].voltage = readings_table[i + 1].voltage;              // voltage
+            readings_table[i].amperage = readings_table[i + 1].amperage;            // amperage
+            readings_table[i].wattage = readings_table[i + 1].wattage;              // wattage
+            readings_table[i].uptime = readings_table[i + 1].uptime;                // up time
+            readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;    // kilowatt hour
+            readings_table[i].powerfactor = readings_table[i + 1].powerfactor;      // power factor
+            readings_table[i].unknown = readings_table[i + 1].unknown;              // unknown
+            readings_table[i].frequency = readings_table[i + 1].frequency;          // frequency
+            readings_table[i].temperature = readings_table[i + 1].temperature;      // temperature
+        }
+        record_count = table_size;                                                  // subsequent records will be added at the end of the table
+        for (i = 0; i <= RS485_Date.length() + 1; i++) {
+            readings_table[table_size].ldate[i] = RS485_Date[i];
+        }                                                                           // write the new reading to the end of the table
+        for (i = 0; i <= RS485_Time.length() + 1; i++) {
+            readings_table[table_size].ltime[i] = RS485_Time[i];
+        }
+        readings_table[table_size].voltage = RS485_Values[Voltage];
+        readings_table[table_size].amperage = RS485_Values[Amperage];
+        readings_table[table_size].wattage = RS485_Values[Wattage];                 // write the watts value into the table
+        readings_table[table_size].uptime = RS485_Values[UpTime];
+        readings_table[table_size].kilowatthour = RS485_Values[Kilowatthour];
+        readings_table[table_size].powerfactor = RS485_Values[PowerFactor];
+        readings_table[table_size].unknown = RS485_Values[Unknown];
+        readings_table[table_size].frequency = RS485_Values[Frequency];
+        readings_table[table_size].temperature = RS485_Values[Temperature];
+    }
+    else {                                                                          // add the record to the table
+        for (i = 0; i <= RS485_Date.length() + 1; i++) {
+            readings_table[record_count].ldate[i] = RS485_Date[i];
+        }                                                                         // write the new reading to the end of the table
+        for (i = 0; i <= RS485_Time.length() + 1; i++) {
+            readings_table[record_count].ltime[i] = RS485_Time[i];
+        }
+        readings_table[record_count].voltage = RS485_Values[Voltage];
+        readings_table[record_count].amperage = RS485_Values[Amperage];
+        readings_table[record_count].wattage = RS485_Values[Wattage];
+        readings_table[record_count].uptime = RS485_Values[UpTime];
+        readings_table[record_count].kilowatthour = RS485_Values[Kilowatthour];
+        readings_table[record_count].powerfactor = RS485_Values[PowerFactor];
+        readings_table[record_count].unknown = RS485_Values[Unknown];
+        readings_table[record_count].frequency = RS485_Values[Frequency];
+        readings_table[record_count].temperature = RS485_Values[Temperature];
+    }                                                                           // end of if record_count > table_size
+    console.print(millis(), DEC); console.println("\t\t10. Record Added to Data Table");
+}
 int StartWiFi(const char* ssid, const char* password) {
     console.print(millis(), DEC); console.print("\t\t\tConnecting to "); console.println(ssid);
     WiFi.begin(ssid, password);
@@ -480,6 +525,7 @@ void Prefill_Array() {
     char csvField[3];
     int fieldNo = 1;
     char temp;
+    current_record_count = 0;
     digitalWrite(SD_Active_led_pin, HIGH);
     File csvFile = SD.open("/" + RS485FileName, FILE_READ);
     if (csvFile) {
@@ -532,23 +578,8 @@ void Prefill_Array() {
                 character_count = 0;
             }
             if (temp == '\n') {                                                                 // end of sd data row
-#ifdef VERBOSE
-                console.print("\t\t("); console.print(log_count + 1, DEC); console.print(")");
-                console.print("."); console.print(readings_table[record_count].ldate);
-                console.print(","); console.print(readings_table[record_count].ltime);
-                console.print(","); printDouble(readings_table[record_count].voltage, 1);
-                console.print(","); printDouble(readings_table[record_count].amperage, 3);
-                console.print(","); printDouble(readings_table[record_count].wattage, 1);
-                console.print(","); printDouble(readings_table[record_count].uptime, 1);
-                console.print(","); printDouble(readings_table[record_count].kilowatthour, 3);
-                console.print(","); printDouble(readings_table[record_count].powerfactor, 2);
-                console.print(","); printDouble(readings_table[record_count].unknown, 1);
-                console.print(","); printDouble(readings_table[record_count].frequency, 1);
-                console.print(","); printDouble(readings_table[record_count].temperature, 1);
-                console.println();
-#endif
                 record_count++;                                                                 // increment array pointer
-                log_count++;
+                current_record_count++;                                                         // increment the current_record count
                 if (record_count > table_size) {                                                // if pointer is greater than table size
                     for (int i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
                         strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
@@ -568,7 +599,7 @@ void Prefill_Array() {
                 fieldNo = 1;
             }
         } // end of while
-        console.print(millis(), DEC); console.print("\t\t\tRecords Loaded: "); console.println(log_count++);
+     //       console.print(millis(), DEC); console.print("\t\t\tRecords Loaded: "); console.println(current_record_count++);
     }
     csvFile.close();
     digitalWrite(SD_Active_led_pin, LOW);
@@ -613,7 +644,7 @@ void Display() {
     webpage += F(",title:'Time'");
     webpage += F("},");
     webpage += F("vAxes:");
-    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{min:0,max:10000},scaleType: 'log',title:'Amperage (mA)',format:'#####'},");
+    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{min:0,max:50000},scaleType: 'log',title:'Amperage (mA)',format:'#####'},");
     webpage += F("}, ");
     webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
     webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data, options);");
@@ -631,6 +662,9 @@ void Start_Readings() {
     started = true;
     webpage = "";
     Display();
+}
+void Web_Reset() {
+    ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
     webpage = "<!DOCTYPE html><head>";
@@ -709,6 +743,7 @@ void Page_Footer() {
     webpage += F("<li><a href='/DownloadFiles'>Download Files</a></li>");
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
     webpage += F("<li><a href='/AverageFiles'>Average Files</a></li>");
+    webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
     // </ul> end ------------------------------------------------------------------------------------------------------
     webpage += F("</ul>");
     // <footer> start -------------------------------------------------------------------------------------------------
@@ -815,7 +850,7 @@ void Statistics() {  // Display file size of the datalog file
     webpage += F("<p ");
     webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
     webpage += F("'>Number of readings = ");
-    webpage += String(log_count);
+    webpage += String(current_record_count);
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
