@@ -8,8 +8,10 @@ Change Record
 17/11/2022  9.0 Wipe SD Button added, Wipe SD Functionality added to Webpage
 09/12/2022  9.1 Webpage Graphs now display 1 to 50Amps
 10/12/2022  9.2 Webpage Reset function added
+11/12/2022  9.3 SD saving and Webpage viewing of console messages added
+
 */
-String version = "V9.2";                                // software version number, shown on webpage
+String version = "V9.3";                                // software version number, shown on webpage
 // compilation switches -----------------------------------------------------------------------------------------------
 //#define VERBOSE       // Remove the // at the start of this line to print out on the console the annotated value from the KWS-AC301L
 #define DEBUG           // display messages on console
@@ -70,6 +72,7 @@ Bounce Boot = Bounce();
 WebServer server(80);                   // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
 File RS485file;                         // Full data file, holds all readings from KWS-AC301L
+File Consolefile;
 // --------------------------------------------------------------------------------------------------------------------
 constexpr int Voltage = 0;
 constexpr int Amperage = 1;
@@ -107,6 +110,7 @@ byte RS485_Requests[9][8] = {
 };
 char print_buffer[80];
 String RS485FileName = "20220101";
+String ConsoleFileName = "20220101";
 String RS485_FieldNames[9] = {
                         "Volts",                    // [0]
                         "Amps",                     // [1]
@@ -134,11 +138,13 @@ double RS485_Values[9] = {
 };
 bool started = false;                                   // used to indicate run switch has been pressed and readings are being taken
 bool booted = false;
+bool debug = false;
 
 String site_width = "1060";                             // width of web page
 String site_height = "600";                             // height of web page
 int const table_size = 72;
-int       record_count, current_record_count;
+constexpr int console_table_size = 30;                  // number of lines to display on debug web page
+int       record_count, current_record_count, console_record_count, current_console_record_count;
 String    webpage, lastcall;
 String Last_Boot_Date = "11/11/2022 12:12:12";
 typedef struct {
@@ -156,6 +162,13 @@ typedef struct {
 } record_type;
 record_type readings_table[table_size + 1];
 record_type a_readings_table[table_size + 1];
+typedef struct {
+    char ldate[11];         // date the message was taken
+    char ltime[9];          // the time the message was taken
+    char milliseconds[10];  // the millis() value of the message    
+    char message[120];
+} console_record_type;
+console_record_type console_table[console_table_size + 1];
 double largest_amperage = 0;
 String date_of_largest_amperage = "2022/01/01";
 String time_of_largest_amperage = "00:00:00";
@@ -163,17 +176,16 @@ unsigned long last_sensor_read = 0;
 uint64_t SD_freespace = 0;
 uint64_t critical_SD_freespace = 0;
 double SD_freespace_double = 0;
+String temp_message;
 int i = 0;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
     while (!console);                                                                    // wait for port to settle
     delay(4000);
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\tCommencing Setup");                // print start message
-    console.print(millis(), DEC);
-    console.println("\t\t1. Initialising Switches and LEDs");                           // initialising Switches and LEDs
-#endif
+    Create_New_Console_File();
+    Write_Console_Message("Commencing Setup");
+    Write_Console_Message("Initializing Switches and LEDs");
     pinMode(Start_switch_pin, INPUT_PULLUP);
     pinMode(Reset_switch_pin, INPUT_PULLUP);
     pinMode(WipeSD_switch_pin, INPUT_PULLUP);
@@ -192,27 +204,18 @@ void setup() {
     SD_switch.update();
     digitalWrite(Running_led_pin, LOW);
     digitalWrite(SD_Active_led_pin, LOW);
-#ifdef DEBUG
-    console.print(millis(), DEC);
-    console.println("\t\t\tSwitches and LEDs Initialised");
+    Write_Console_Message("Switches and LEDs Initialised");
     // WiFi and Web Setup -------------------------------------------------------------------------
-    console.print(millis(), DEC); console.println("\t\t2. Starting WiFi");
-#endif
+    Write_Console_Message("Starting WiFi");
     StartWiFi(ssid, password);                      // Start WiFi
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\t\t\tWiFi Started");
-    console.print(millis(), DEC); console.println("\t\t3. Starting Time Server");
-#endif
+    Write_Console_Message("WiFi Started");
+    Write_Console_Message("Starting Time Server");
     StartTime();                                    // Start Time
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\t\t\tTime Started");
-    console.print(millis(), DEC); console.println("\t\t4. Starting Web Server");
-#endif
+    Write_Console_Message("Time Started");
+    Write_Console_Message("Starting Web Server");
     server.begin();                                 // Start Webserver
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\t\t\tServer Started");
-    console.print(millis(), DEC); console.print("\t\t\tWiFi IP Address: "); console.println(WiFi.localIP());
-#endif
+    Write_Console_Message("Server Started");
+    Write_Console_Message("WiFi IP Address: " + String(WiFi.localIP()));
     server.on("/", Display);
     server.on("/Start", Start_Readings);
     server.on("/Display", Display);
@@ -222,31 +225,27 @@ void setup() {
     server.on("/GetFile", Download_File);                   // download the selectedfile
     server.on("/DeleteFiles", Delete_Files);                // select a file to delete
     server.on("/DelFile", Del_File);                        // delete the selected file
-    server.on("/AverageFiles", Average_Files);            // display hourly analysis of current file
-    server.on("/AverageFile", Average_File);              // analysis the selected file
-    server.on("/Reset", Web_Reset);
+    server.on("/AverageFiles", Average_Files);              // display hourly analysis of current file
+    server.on("/AverageFile", Average_File);                // analysis the selected file
+    server.on("/Reset", Web_Reset);                         // reset the orocessor from the webpage
+    server.on("/DebugToggle", Debug_Toggle);                // turn the saving of console messages on
+    server.on("/Debug", Debug_Show);                        // display the last 30 console messages on a webpage
     server.begin();
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\t\t\tWebserver started");
+    Write_Console_Message("Webserver started");
     // RS485 Setup --------------------------------------------------------------------------------
-    console.print(millis(), DEC); console.println("\t\t5. Initialising RS485 Interface");
-#endif
+    Write_Console_Message("Initialising RS485 Interface");
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
-#ifdef DEBUG
-    console.print(millis(), DEC); console.println("\t\t\tRS485 Interface Initialised");
-    console.print(millis(), DEC); console.println("\t\t6. SD Drive Configuration");
-    console.print(millis(), DEC); console.print("\t\t\tSS pin:["); console.print(SS); console.println("]");
-    console.print(millis(), DEC); console.print("\t\t\tMOSI pin:["); console.print(MOSI); console.println("]");
-    console.print(millis(), DEC); console.print("\t\t\tMISO pin:["); console.print(MISO); console.println("]");
-    console.print(millis(), DEC); console.print("\t\t\tSCK pin:["); console.print(SCK); console.println("]");
-#endif
+    Write_Console_Message("RS485 Interface Initialised");
+    Write_Console_Message("SD Drive Configuration");
+    Write_Console_Message("SS pin:[" + String(SS) + "]");
+    Write_Console_Message("MOSI pin:[" + String(MOSI) + "]");
+    Write_Console_Message("MISO pin:[" + String(MISO) + "]");
+    Write_Console_Message("SCK pin:[" + String(SCK) + "]");
     digitalWrite(SD_Active_led_pin, HIGH);
     if (!SD.begin(SS_pin)) {
-#ifdef DEBUG
-        console.print(millis(), DEC); console.println("\t\tSD Drive Begin Failed @ line 212");
-#endif
+        Write_Console_Message("SD Drive Begin Failed @ line 244");
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -255,14 +254,10 @@ void setup() {
         }
     }
     else {
-#ifdef DEBUG
-        console.print(millis(), DEC); console.println("\t\t\tSD Drive Begin Succeeded");
-#endif
+        Write_Console_Message("SD Drive Begin Succeeded");
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
-#ifdef DEBUG
-            console.print(millis(), DEC); console.println("\t\tNo SD card attached @ line 224");
-#endif
+            Write_Console_Message("No SD card attached @ line 256");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -270,44 +265,38 @@ void setup() {
                 Check_Reset_Switch();
             }
         }
-#ifdef DEBUG
-        console.print(millis(), DEC); console.print("\t\t\tSD Card Type: ");
+        String card;
         if (cardType == CARD_MMC) {
-            console.println("MMC");
+            card = "MMC";
         }
         else if (cardType == CARD_SD) {
-            console.println("SDSC");
+            card = "SDSC";
         }
         else if (cardType == CARD_SDHC) {
-            console.println("SDHC");
+            card = "SDHC";
         }
         else {
-            console.println("UNKNOWN");
+            card = "UNKNOWN";
         }
-#endif
+        Write_Console_Message("SD Card Type: " + card);
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
         critical_SD_freespace = cardSize * (uint64_t).9;
-#ifdef DEBUG
-        console.print(millis(), DEC); console.print("\t\t\tSD Card Size: "); console.print(cardSize); console.println("MBytes");
-        console.print(millis(), DEC); console.print("\t\t\tTotal Bytes: "); console.println(SD.totalBytes());
-        console.print(millis(), DEC); console.print("\t\t\tUsed bytes: "); console.println(SD.usedBytes());
-        console.print(millis(), DEC); console.println("\t\t\tSD Card Initialisation Complete");
-        console.print(millis(), DEC); console.println("\t\t\tCreate Logging File");
-#endif
+        temp_message = "SD Card Size : " + String(cardSize) + "MBytes";
+        Write_Console_Message(temp_message);
+        temp_message = "SD Total Bytes : " + String(SD.totalBytes());
+        Write_Console_Message(temp_message);
+        temp_message = "SD Used bytes : " + String(SD.usedBytes());
+        Write_Console_Message("SD Card Initialisation Complete");
+        Write_Console_Message("Create Logging File");
     }
     Last_Boot_Date = GetDate(true) + " " + GetTime(true);
     This_Date = GetDate(false);
     RS485FileName = GetDate(false) + ".csv";
-#ifdef DEBUG
-    console.print(millis(), DEC); console.print("\t\t\tRS485 File Created: "); console.println(RS485FileName);
-#endif
+    Write_Console_Message("RS485 File Created: " + console.println(RS485FileName));
     if (!SD.exists("/" + RS485FileName)) {
         RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
         if (!RS485file) {                                     // log file not opened
-#ifdef DEBUG
-            console.print(millis(), DEC);
-            console.print("\t\tError opening RS485file: @ line 278 ["); console.print(RS485FileName); console.println("]");
-#endif           
+            Write_Console_Message("Error opening RS485file: @ line 278 [" + String(RS485FileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -326,16 +315,16 @@ void setup() {
         RS485file.flush();
         current_record_count = 0;
         digitalWrite(SD_Active_led_pin, LOW);
-        console.print(millis(), DEC); console.println("\t\t\tRS485 File Created");
+        Write_Console_Message("RS485 File Created" + String(RS485FileName));
     }
     else {
-        console.print(millis(), DEC); console.println("\t\t\tRS485 File Already Exists");
+        Write_Console_Message("RS485 File " + String(RS485FileName) + " already exists");
         Prefill_Array();
     }
+    Write_Console_Message("End of Setup");
+    Write_Console_Message("Running in Full Function Mode");
+    Write_Console_Message("Press Start Button to commence readings");
     digitalWrite(SD_Active_led_pin, LOW);
-    console.print(millis(), DEC); console.println("\t\t7. End of Setup");
-    console.print(millis(), DEC); console.println("\t\t8. Running in Full Function Mode");
-    console.print(millis(), DEC); console.println("\t\t9. Press Start Button to commence readings");
 }   // end of Setup
 void loop() {
     Check_Reset_Switch();                                           // check if reset switch has been pressed
@@ -363,16 +352,11 @@ void loop() {
 void Create_New_RS485_Data_File() {
     digitalWrite(SD_Active_led_pin, HIGH);              // turn the SD activity LED on
     RS485FileName = GetDate(false) + ".csv";            // yes, so create a new file
-    console.print(millis(), DEC);
-    console.print("\t\t\tRS485 File Created: ");
-    console.println(RS485FileName);
-
+    Write_Console_Message("RS485 File Created: " + String(RS485FileName));
     if (!SD.exists("/" + RS485FileName)) {
         RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
         if (!RS485file) {                                     // log file not opened
-            console.print(millis(), DEC);
-            console.print("\t\tError opening RS485file: [");
-            console.print(RS485FileName); console.println("]");
+            Write_Console_Message("Error opening RS485file: [" + String(RS485FileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -392,23 +376,20 @@ void Create_New_RS485_Data_File() {
         record_count = 0;                                   // zero the pointer used by the display table
         largest_amperage = 0;                               // zero the record of the greatest amperage
         current_record_count = 0;                           // zero the count because this is a new file
-        console.print(millis(), DEC);
-        console.println("\t\t\tRS485 File Created");
+        Write_Console_Message("RS485 File Created");
     }
     digitalWrite(SD_Active_led_pin, LOW);                  // turn the SD activity LED off
 }
 void Write_New_RS485_Record_to_Data_File() {
-    digitalWrite(SD_Active_led_pin, HIGH);                  // turn the SD activity LED on
+    digitalWrite(SD_Active_led_pin, HIGH);                      // turn the SD activity LED on
     RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
     if (!RS485file) {                                           // oops - file not available!
-        console.print(millis(), DEC);
-        console.print("\t\tError re-opening RS485file:");
-        console.println(RS485FileName);
+        Write_Console_Message("Error re-opening RS485file:" + String(RS485FileName));
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
             delay(500);
-            Check_Reset_Switch();                                                   // Reset will restart the processor so no return
+            Check_Reset_Switch();                               // Reset will restart the processor so no return
         }
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
@@ -438,14 +419,12 @@ void Write_New_RS485_Record_to_Data_File() {
     }
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
-        console.print(millis(), DEC);
-        console.print("\tWARNING - SD Free Space critical ");
-        console.print(SD_freespace); console.println("MB");
+        Write_Console_Message("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
     }
     record_count++;                                             // increment the record count, the array pointer
     current_record_count++;                                     // increment the current record count
-    digitalWrite(SD_Active_led_pin, LOW);                  // turn the SD activity LED on
-    console.print(millis(), DEC); console.println("\t\t10. Record Added to Data File");
+    digitalWrite(SD_Active_led_pin, LOW);                       // turn the SD activity LED on
+    Write_Console_Message("Record Added to Data File");
 }
 void Add_New_RS485_Record_to_Display_Table() {
     if (record_count > table_size) {                            // table full, shuffle fifo
@@ -497,24 +476,136 @@ void Add_New_RS485_Record_to_Display_Table() {
         readings_table[record_count].frequency = RS485_Values[Frequency];
         readings_table[record_count].temperature = RS485_Values[Temperature];
     }                                                                           // end of if record_count > table_size
-    console.print(millis(), DEC); console.println("\t\t10. Record Added to Data Table");
+    Write_Console_Message("Record Added to Data Table");
+}
+void Create_New_Console_File() {
+    char milliseconds[10];
+    digitalWrite(SD_Active_led_pin, HIGH);                  // turn the SD activity LED on
+    ConsoleFileName = GetDate(false) + ".txt";              // yes, so create a new file
+    Write_Console_Message("Console File Created: " + String(ConsoleFileName));
+    if (!SD.exists("/" + ConsoleFileName)) {
+        Consolefile = SD.open("/" + ConsoleFileName, FILE_WRITE);
+        if (!Consolefile) {                                     // log file not opened
+            Write_Console_Message("Error opening Console file: [" + String(ConsoleFileName) + "]");
+            while (true) {
+                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+                delay(500);
+                Check_Reset_Switch();
+            }
+        }
+        ltoa(millis(), milliseconds, 10);
+        Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + (String)milliseconds + ",Console Log File Started");
+        Consolefile.close();
+        Consolefile.flush();
+        console_record_count = 1;
+        Write_Console_Message("Console File Created");
+    }
+    digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
+}
+void Write_Console_Message(String message) {
+    String Date;
+    String Time;
+    char mseconds[10];
+    String Milliseconds;
+    int x = 0;
+    ltoa(millis(), mseconds, 10);                               // convert millis() (unsigned long) into character array
+    for (x = 0; x <= 10; x++) {                                     // convert character array into a String
+        Milliseconds[x] = mseconds[x];
+    }
+    Milliseconds[x] = '\0';                                                 // terminate the string
+#ifdef DEBUG                                                        // only write to console if DEBUG defined
+    console.print(Milliseconds); console.println("\tmessage");
+#endif
+    Date = GetDate(true);
+    Time = GetTime(true);
+    Write_New_Console_Message_to_Console_File(Date, Time, Milliseconds, message);             // but always write to debug file
+    Add_New_Console_Message_to_Console_Table(Date, Time, Milliseconds, message);              // and add the message to the web page
+}
+void Write_New_Console_Message_to_Console_File(String date, String time, String milliseconds, String message) {
+    digitalWrite(SD_Active_led_pin, HIGH);                              // turn the SD activity LED on
+    Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);          // open the SD file
+    if (!Consolefile) {                                                 // oops - file not available!
+        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
+        while (true) {
+            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+            delay(500);
+            Check_Reset_Switch();                                       // Reset will restart the processor so no return
+        }
+    }
+    Consolefile.println(date + "," + time + "," + milliseconds + "," + message);
+    Consolefile.close();                                                // close the sd file
+    Consolefile.flush();                                                // make sure it has been written to SD
+    SD_freespace_double = (double)SD_freespace / 1000000;
+    if (SD_freespace < critical_SD_freespace) {
+        Write_Console_Message("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+    }
+    digitalWrite(SD_Active_led_pin, LOW);                               // turn the SD activity LED off
+    Write_Console_Message("Record Added to Data File");
+}
+void Add_New_Console_Message_to_Console_Table(String date, String time, String milliseconds, String message) {
+    if (console_record_count > console_table_size) {                            // table full, shuffle fifo
+        for (int x = 0; x < console_table_size; x++) {                          // shuffle the rows up, losing row 0, make row [table_size] free
+            for (i = 0; i <= 11; i++) {                                         // write the new message date onto the end of the table
+                console_table[x].ldate[i] = console_table[x + 1].ldate[i];
+            }
+            for (i = 0; i <= 9; i++) {                                          // write the new message time onto the end of the table
+                console_table[x].ltime[i] = console_table[x + 1].ltime[i];
+            }
+            for (i = 0; i <= 10; i++) {
+                console_table[x].milliseconds[i] = console_table[x + 1].milliseconds[i];
+            }
+            for (i = 0; i <= 10; i++) {
+                console_table[x].message[i] = console_table[x + 1].message[i];  // write the new message onto the end of the table
+            }
+
+        }
+        console_record_count = console_table_size;                              // subsequent records will be added at the end of the table
+        for (i = 0; i <= date.length() + 1; i++) {                              // write the new message date onto the end of the table
+            console_table[console_table_size].ldate[i] = date[i];
+        }
+        for (i = 0; i <= time.length() + 1; i++) {                              // write the new message time onto the end of the table
+            console_table[console_table_size].ltime[i] = time[i];
+        }
+        for (i = 0; i <= milliseconds.length() + 1; i++) {
+            console_table[console_table_size].milliseconds[i] = milliseconds[i];
+        }
+        for (i = 0; i <= message.length() + 1; i++) {
+            console_table[console_table_size].message[i] = message[i];   // write the new message onto the end of the table
+        }
+    }
+    else {                                                                      // add the record to the table
+        for (i = 0; i <= date.length() + 1; i++) {
+            console_table[console_record_count].ldate[i] = date[i];
+        }                                                                       // write the new reading to the end of the table
+        for (i = 0; i <= time.length() + 1; i++) {
+            console_table[console_record_count].ltime[i] = time[i];
+        }
+        for (i = 0; i <= milliseconds.length() + 1; i++) {
+            console_table[console_record_count].milliseconds[i] = milliseconds[i];
+        }
+        for (i = 0; i <= message.length() + 1; i++) {
+            console_table[console_record_count].message[i] = message[i];      // write the new message onto the end of the table
+        }
+    }
+    console_record_count++;                                                     // increment the console record count
+    Write_Console_Message("Record Added to Console Table");
 }
 int StartWiFi(const char* ssid, const char* password) {
-    console.print(millis(), DEC); console.print("\t\t\tConnecting to "); console.println(ssid);
+    Write_Console_Message("Connecting to " + String(ssid));
     WiFi.begin(ssid, password);
-    console.print(millis(), DEC); console.print("\t\t\tWiFi Status: "); console.println(WiFi.status());
-    console.print(millis(), DEC); console.print("\t\t\t");
+    Write_Console_Message("WiFi Status: " + String(WiFi.status()));
     int wifi_connection_attempts = 0;
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
-        console.print(".");
+        Write_Console_Message(".");
         if (wifi_connection_attempts++ > 20) {
-            console.print(millis(), DEC); console.println("\t\tNetwork Error, Restarting");
+            Write_Console_Message("Network Error, Restarting");
             ESP.restart();
         }
     }
-    console.println("");
-    console.print(millis(), DEC); console.println("\t\t\tConnected");
+    Write_Console_Message("Connected");
     return true;
 }
 void StartTime() {
@@ -533,7 +624,7 @@ void Prefill_Array() {
             temp = csvFile.read();
             if (temp == '\n') break;
         }
-        console.print(millis(), DEC); console.print("\t\t\tLoading datafile from "); console.println(RS485FileName);
+        Write_Console_Message("Loading datafile from " + String(RS485FileName));
         while (csvFile.available()) {                                           // do while there are data available
             temp = csvFile.read();
             csvField[character_count++] = temp;                                 // add it to the csvfield string
@@ -599,13 +690,64 @@ void Prefill_Array() {
                 fieldNo = 1;
             }
         } // end of while
-     //       console.print(millis(), DEC); console.print("\t\t\tRecords Loaded: "); console.println(current_record_count++);
     }
     csvFile.close();
     digitalWrite(SD_Active_led_pin, LOW);
 }
+void Prefill_Console_Array() {
+    int character_count = 0;
+    char txtField[3];
+    int fieldNo = 1;
+    char temp;
+    current_console_record_count = 0;
+    digitalWrite(SD_Active_led_pin, HIGH);
+    File txtFile = SD.open("/" + ConsoleFileName, FILE_READ);
+    if (txtFile) {
+        Write_Console_Message("Loading console file from " + String(ConsoleFileName));
+        while (txtFile.available()) {                                           // do while there are data available
+            temp = txtFile.read();
+            txtField[character_count++] = temp;                                 // add it to the csvfield string
+            if (temp == ',' || temp == '\n') {                                  // look for end of field
+                txtField[character_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
+                switch (fieldNo) {
+                case 1:
+                    strcpy(console_table[console_record_count].ldate, txtField);        // Date
+                    break;
+                case 2:
+                    strcpy(console_table[console_record_count].ltime, txtField);        // Time
+                    break;
+                case 3:
+                    strcpy(console_table[console_record_count].milliseconds, txtField); // milliseconds
+                    break;
+                case 4:
+                    strcpy(console_table[console_record_count].message, txtField);      // message
+                    break;
+                }
+                fieldNo++;
+                txtField[0] = '\0';
+                character_count = 0;
+            }
+            if (temp == '\n') {                                                                 // end of sd data row
+                console_record_count++;                                                         // increment array pointer
+                current_console_record_count++;                                                 // increment the current_record count
+                if (record_count > table_size) {                                                // if pointer is greater than table size
+                    for (int i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
+                        strcpy(console_table[i].ldate, console_table[i + 1].ldate);             // date
+                        strcpy(console_table[i].ltime, console_table[i + 1].ltime);             // time
+                        strcpy(console_table[i].milliseconds, console_table[i + 1].milliseconds);
+                        strcpy(console_table[i].message, console_table[i + 1].message);
+                    }
+                    console_record_count = console_table_size;                                                  // subsequent records will be added at the end of the table
+                }
+                fieldNo = 1;
+            }
+        } // end of while
+    }
+    txtFile.close();
+    digitalWrite(SD_Active_led_pin, LOW);
+}
 void Display() {
-    console.print(millis(), DEC); console.println("\t\tStart of Display Channels");
+    Write_Console_Message("Start of Display Channels");
     String log_time;
     log_time = "Time";
     webpage = "";                           // don't delete this command, it ensures the server works reliably!
@@ -656,7 +798,7 @@ void Display() {
     server.send(200, "text/html", webpage);
     webpage = "";
     lastcall = "display";
-    console.print(millis(), DEC); console.println("\t\tEnd of Display Wattage");
+    Write_Console_Message("End of Display Wattage");
 }
 void Start_Readings() {
     started = true;
@@ -711,7 +853,7 @@ void Page_Footer() {
     // <ul> start -----------------------------------------------------------------------------------------------------
     webpage += F("<ul>");
     if (!started) {
-        console.print(millis(), DEC); console.println("\t\tLogger not started");
+        Write_Console_Message("Readings not started");
         webpage += F("<li>");
         webpage += F("<span ");
         webpage += F("style='color:#e03e2d;'>");
@@ -723,7 +865,7 @@ void Page_Footer() {
         webpage += F("</li>");
     }
     else {
-        console.print(millis(), DEC); console.println("\t\tLogger started");
+        Write_Console_Message("Readings started");
         webpage += F("<li>");
         webpage += F("<span ");
         webpage += F("style='color:#e03e2d;'>");
@@ -744,6 +886,60 @@ void Page_Footer() {
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
     webpage += F("<li><a href='/AverageFiles'>Average Files</a></li>");
     webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
+    if (!debug) {
+        Write_Console_Message("Debug not started");
+        webpage += F("<li>");
+        webpage += F("<span ");
+        webpage += F("style='color:#e03e2d;'>");
+        webpage += F("<a ");
+        webpage += F("style='color:#e03e2d;");
+        webpage += F("'href='/DebugToggle' >Toggle Debug");
+        webpage += F("</a>");
+        webpage += F("</span>");
+        webpage += F("</li>");
+    }
+    else {
+        Write_Console_Message("Debug started");
+        webpage += F("<li>");
+        webpage += F("<span ");
+        webpage += F("style='color:#e03e2d;'>");
+        webpage += F("<a ");
+        webpage += F("style='color:#e03e2d;");
+        webpage += F("'href='/DebugToggle'>");
+        webpage += F("<span ");
+        webpage += F("style='color:#000000;'>Toggle Debug");
+        webpage += F("</span>");
+        webpage += F("</a>");
+        webpage += F("</span>");
+        webpage += F("</li>");
+    }
+    if (!debug) {
+        Write_Console_Message("Debug show not started");
+        webpage += F("<li>");
+        webpage += F("<span ");
+        webpage += F("style='color:#e03e2d;'>");
+        webpage += F("<a ");
+        webpage += F("style='color:#e03e2d;");
+        webpage += F("'href='/DebugShow' >Show Debug");
+        webpage += F("</a>");
+        webpage += F("</span>");
+        webpage += F("</li>");
+    }
+    else {
+        Write_Console_Message("Debug Show started");
+        webpage += F("<li>");
+        webpage += F("<span ");
+        webpage += F("style='color:#e03e2d;'>");
+        webpage += F("<a ");
+        webpage += F("style='color:#e03e2d;");
+        webpage += F("'href='/DebugSHow'>");
+        webpage += F("<span ");
+        webpage += F("style='color:#000000;'>Show Debug");
+        webpage += F("</span>");
+        webpage += F("</a>");
+        webpage += F("</span>");
+        webpage += F("</li>");
+    }
     // </ul> end ------------------------------------------------------------------------------------------------------
     webpage += F("</ul>");
     // <footer> start -------------------------------------------------------------------------------------------------
@@ -772,8 +968,7 @@ void Page_Footer() {
     webpage += F("</html>");
 }
 void Download() {                                               // download, to PC accessing webpage, the current datafile
-    console.print(millis(), DEC);
-    console.println("\t\tStart of Log Download");
+    Write_Console_Message("Start of Log Download");
     if (started) {
         File datafile = SD.open("/" + RS485FileName, FILE_READ);    // Now read data from FS
         if (datafile) {                                             // if there is a file
@@ -781,29 +976,26 @@ void Download() {                                               // download, to 
                 String contentType = "application/octet-stream";
                 server.sendHeader("Content-Disposition", "attachment; filename=" + RS485FileName);
                 if (server.streamFile(datafile, contentType) != datafile.size()) {
-                    console.print(millis(), DEC);
-                    console.println("\t\tSent less data than expected");
+                    Write_Console_Message("Sent less data than expected");
                 }
             }
         }
         datafile.close(); // close the file:
     }
     else {
-        console.print(millis(), DEC); console.println("\t\tLogging not started, no current file");
+        Write_Console_Message("Logging not started, no current file");
     }
-    console.print(millis(), DEC); console.println("\t\tEnd of Log View");
+    Write_Console_Message("End of Log View");
     webpage = "";
     Display();
 }
 void Statistics() {  // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    console.print(millis(), DEC); console.println("\t\tStart of Log Stats");
+    Write_Console_Message("Start of Log Stats");
     if (!started) {
         RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
         if (!RS485file) {                                                               // oops - file not available!
-            console.print(millis(), DEC);
-            console.print("\t\tError re-opening RS485file:");
-            console.println(RS485FileName);
+            Write_Console_Message("Error re-opening RS485file: " + RS485FileName);
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -834,7 +1026,7 @@ void Statistics() {  // Display file size of the datalog file
         webpage += "</span></strong></p>";
     }
     else {
-        console.print(millis(), DEC); console.println("\t\tFreespace => critical");
+        Write_Console_Message("Freespace => critical");
         webpage += F("<p ");
         webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px'");
         webpage += F("'>SD Free Space = ");
@@ -868,11 +1060,11 @@ void Statistics() {  // Display file size of the datalog file
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of Log Stats");
+    Write_Console_Message("End of Log Stats");
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console.print(millis(), DEC); console.println("\t\tStart of List Files");
+    Write_Console_Message("Start of List Files");
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
@@ -883,33 +1075,29 @@ void Download_Files() {
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of List Files");
+    Write_Console_Message("End of List Files");
 }
 void Download_File() {                                                          // download the selected file
-    console.print(millis(), DEC);
-    console.println("\t\tGet File Requested");
+    Write_Console_Message("Get File Requested");
     String fileName = server.arg("file");
-    console.print(millis(), DEC);
-    console.print("\t\tFile Name = ");
-    console.println(fileName);
+    Write_Console_Message("File Name = " + fileName);
     File datafile = SD.open("/" + fileName, FILE_READ);    // Now read data from FS
     if (datafile) {                                             // if there is a file
         if (datafile.available()) {                             // If data is available and present
             String contentType = "application/octet-stream";
             server.sendHeader("Content-Disposition", "attachment; filename=" + fileName);
             if (server.streamFile(datafile, contentType) != datafile.size()) {
-                console.print(millis(), DEC);
-                console.println("\t\tSent less data than expected");
+                Write_Console_Message("Sent less data than expected");
             }
         }
     }
     datafile.close(); // close the file:
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of Get_File");
+    Write_Console_Message("End of Get_File");
 }
 void Delete_Files() {                                                           // allow the cliet to select a file for deletion
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console.print(millis(), DEC); console.println("\t\tStart of List Files");
+    Write_Console_Message("Start of List Files");
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Delete Files");
     for (i = 1; i < file_count; i++) {
@@ -922,11 +1110,10 @@ void Delete_Files() {                                                           
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of List Files");
+    Write_Console_Message("End of List Files");
 }
 void Del_File() {                                                       // web request to delete a file
-    console.print(millis(), DEC);
-    console.println("\t\tDelete File Requested");
+    Write_Console_Message("Delete File Requested");
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
     if (fileName != ("/" + RS485FileName)) {                            // do not delete the current file
@@ -943,11 +1130,11 @@ void Del_File() {                                                       // web r
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of Delete_File");
+    Write_Console_Message("End of Delete_File");
 }
 void Average_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console.print(millis(), DEC); console.println("\t\tStart of Average Files");
+    Write_Console_Message("Start of Average Files");
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Plot Average Files");
     for (i = 1; i < file_count; i++) {
@@ -958,10 +1145,10 @@ void Average_Files() {
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    console.print(millis(), DEC); console.println("\t\tEnd of List Files");
+    Write_Console_Message("End of List Files");
 }
 void Average_File() {
-    console.print(millis(), DEC); console.println("\t\t10. Start of Analyse File");
+    Write_Console_Message("Start of Analyse File");
     String log_time;
     log_time = "Time";
     char temp;
@@ -999,33 +1186,25 @@ void Average_File() {
         }
     }
     csvFile.close();
-    console.print(millis(), DEC);
-    console.print("\t\tNumber of Records in File :");
-    console.println(record_count);
+    Write_Console_Message("Number of Records in File :" + String(record_count));
     file_record_count = record_count;
     //  2. calculate the number of rows per average -------------------------------------------------------------------
     if (record_count < table_size) {
-        console.print(millis(), DEC);
-        console.println("\t\tInsufficient Records");
+        Write_Console_Message("Insufficient Records");
     }
     records = record_count / table_size;
     record_count = 0;
-    console.print(millis(), DEC);
-    console.print("\t\tNumber of Records per batch:");
-    console.println(records);
+    Write_Console_Message("Number of Records per batch: " + String(records));
     // 3. Read the specified number of records and calculate average amperage -----------------------------------------
     csvFile = SD.open("/" + fileName, FILE_READ);               // open the file again
     if (csvFile) {
-        console.print(millis(), DEC);
-        console.print("\t\tOpening File Again:");
+        Write_Console_Message("Opening File Again:");
         console.println(fileName);
         while (csvFile.available()) {                           // throw the first row, column headers, away
             temp = csvFile.read();
             if (temp == '\n') break;
         }
-        console.print(millis(), DEC);
-        console.print("\t\tLoading datafile from ");
-        console.println(fileName);
+        Write_Console_Message("Loading datafile from: " + String(fileName));
         while (csvFile.available()) {                           // do while there are data available
             temp = csvFile.read();                              // read next character into temp
             csvField[character_count++] = temp;                 // add it to the csvfield string
@@ -1075,12 +1254,6 @@ void Average_File() {
             }
         }   // end of while
     } // end of file.available()
-    console.print(millis(), DEC);
-    console.print("\t\tTotal Record : ");
-    console.println(a_logging_count, DEC);
-    console.print(millis(), DEC);
-    console.print("\t\t File Count : ");
-    console.println(file_record_count, DEC);
     csvFile.close();
     digitalWrite(SD_Active_led_pin, LOW);
     //4. Generate web page
@@ -1138,7 +1311,54 @@ void Average_File() {
         }
         a_readings_table[x].amperage = 0;
     }
-    console.print(millis(), DEC); console.println("\t\tEnd of Display Average");
+    Write_Console_Message("End of Display Average");
+}
+void Debug_Toggle() {                                                  // display console message on web page
+#ifndef DEBUG
+    debug = false;
+    webpage = "";
+    Display();
+#endif
+    debug = !debug;
+    webpage = "";
+    Display();
+}
+void Debug_Show() {
+    int file_count = Count_Files_on_SD_Drive();
+    Write_Console_Message("Start of Console Message DIsplay");
+    Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);                      // open the SD file
+    if (!Consolefile) {                                                              // oops - file not available!
+        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
+        while (true) {
+            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+            delay(500);
+            Check_Reset_Switch();                                                   // Reset will restart the processor so no return
+        }
+    }
+    SD_freespace = (SD.totalBytes() - SD.usedBytes());
+    webpage = ""; // don't delete this command, it ensures the server works reliably!
+    Page_Header(false, "Console Messages");
+    File datafile = SD.open("/" + ConsoleFileName, FILE_READ);  // Now read data from FS
+    webpage += F("<p ");
+    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+    for (int x = 0; x < console_record_count; x++) {
+        webpage += F(">");
+        webpage += String(console_table[x].ldate);
+        webpage += F(" ");
+        webpage += String(console_table[x].ltime);
+        webpage += F(".");
+        webpage += String(console_table[x].milliseconds);
+        webpage += F(" ");
+        webpage += String(console_table[x].message);
+        webpage += "</span></strong></p>";
+    }
+    datafile.close();
+    Page_Footer();
+    server.send(200, "text/html", webpage);
+    webpage = "";
+    Debug_Show();
+    Write_Console_Message("End of Debug Show");
 }
 int Count_Files_on_SD_Drive() {
     int file_count = 0;
@@ -1153,10 +1373,7 @@ int Count_Files_on_SD_Drive() {
             File datafile = SD.open("/" + filename, FILE_READ);     // Now read data from FS
             if (datafile) {                                         // if there is a file
                 FileNames[file_count] = filename;
-                console.print(millis(), DEC);
-                console.print("\t\tFile "); console.print(file_count, DEC);
-                console.print(" filename "); console.print(filename);
-                console.print(" FileNames "); console.println(FileNames[file_count]);
+                Write_Console_Message("File " + String(file_count) + " filename " + String(filename) + " FileNames "); console.println(FileNames[file_count]);
                 file_count++;                                       // increment the file count
             }
             datafile.close(); // close the file:
@@ -1169,33 +1386,30 @@ int Count_Files_on_SD_Drive() {
     } while (files_present);
     return (file_count);
 }
-void Wipe_Files() {                                                 // selected by pressing combonation of buttons
+void Wipe_Files() {                            // selected by pressing combonation of buttons
     String filename;
     File root = SD.open("/");                                       //  Open the root directory
     while (true) {
         File entry = root.openNextFile();                           //  get the next file
         if (entry) {
             filename = entry.name();
-            console.print(millis(), DEC); console.print("\t\tRemoving "); console.println(filename);
+            Write_Console_Message("Removing " + filename);
             SD.remove(entry.name());                                //  delete the file
         }
         else {
             root.close();
-            console.print(millis(), DEC); console.println("\t\tAll files removed from root directory, rebooting");
+            Write_Console_Message("All files removed from root directory, rebooting");
             ESP.restart();
         }
     }
 }
 void Send_Request(int field) {
-    //    console.print(millis(), DEC); console.print("\tSend Request:");
     digitalWrite(RS485_Enable_pin, transmit);                                               // set RS485_Enable HIGH to transmit values to RS485
     for (int x = 0; x < 7; x++) {
         RS485_Port.write(RS485_Requests[field][x]);                                     // write the Request string to the RS485 Port
-        //        console.print("("); console.print(RS485_Requests[field][x], DEC); console.print("),");
         delay(2);
     }
     RS485_Port.write(RS485_Requests[field][7]);
-    //    console.print("("); console.print(RS485_Requests[field][7], DEC); console.println(").");
     delay(2);
 }
 double Receive(int field) {
@@ -1205,14 +1419,12 @@ double Receive(int field) {
     bool value_status = false;
     unsigned long start_time;                                                   // take the start time, used to check for time out
     long value[7] = { 0,0,0,0,0,0,0 };
-    //    console.print(millis(), DEC); console.println("\t\tIn Receive Mode");
     digitalWrite(RS485_Enable_pin, receive);                                    // set Enable pin low to receive values from RS485
     start_time = millis();                                                      // take the start time, used to check for time out
     do {
         while (!RS485_Port.available()) {                                       // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {                   // no data received within 500 ms so timeout
-                console.print(millis(), DEC);
-                console.print("\tNo Reply from RS485 within 500 ms");
+                Write_Console_Message("No Reply from RS485 within 500 ms");
                 while (true) {                                                          // wait for reset to be pressed
                     digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                     digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -1278,89 +1490,53 @@ double Receive(int field) {
         switch (field) {
         case Voltage: {                                                                                 // Voltage
             double volts = (value[3] << 8) + value[4];                                                  // Received is number of tenths of volt
-            volts = volts / (double)10;                                                                 // convert to vv.v
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tVoltage = [");
-            printDouble(volts, 2); console.println("]");                                              // print to monitor as nnnn.n
-#endif            
+            volts = volts / (double)10;                                                                 // convert to v           
             return volts;                                                                               // Voltage output format double
             break;
         }
         case Amperage: {                                                                                // Amperage
             double amperage = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);       // Received is number of milli amps 
             amperage = amperage / (double)1000;                                                         // convert to amps 0.00n
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tAmperage = [");
-            printDouble(amperage, 4); console.println("]");
-#endif
             return amperage;                                                                            // Amperage output format double nn.n
             break;
         }
         case Wattage: {                                                                                 // Wattage
             double wattage = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);        // Recieved is number of tenths of watts
             wattage = wattage / (double)10;                                                             // convert to watts
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tWattage = [");
-            printDouble(wattage, 2); console.println("]");
-#endif
             return wattage;
             break;
         }
         case UpTime: {
             double uptime = (value[3] << 8) + value[4];
             uptime = uptime / (double)60;                                                              // convert to hours
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tUp Time = [");
-            printDouble(uptime, 3); console.println("]");
-#endif
             return uptime;
             break;
         }
         case Kilowatthour: {
             double kilowatthour = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);
             kilowatthour = kilowatthour / (double)1000;
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tKiloWatts = [");
-            printDouble(kilowatthour, 4); console.println("]");
-#endif
             return kilowatthour;
             break;
         }
         case PowerFactor: {
             double powerfactor = (value[3] << 8) + value[4];
             powerfactor = powerfactor / (double)100;
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tPower Factor = [");
-            printDouble(powerfactor, 3); console.println("]");
-#endif
             return powerfactor;
             break;
         }
         case Unknown: {
             double unknown = (value[3] << 8) + value[4];
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tUnknown = [");
-            printDouble(unknown, 0); console.println("]");
-#endif
             return unknown;
             break;
         }
         case Frequency: {
             double frequency = (value[3] * 256) + value[4];
             frequency = frequency / (double)10;
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tFrequency = [");
-            printDouble(frequency, 2); console.println("]");
-#endif
             return frequency;
             break;
         }
         case Temperature: {
             double temperature = (value[3] << 8) + value[4];
-#ifdef VERBOSE
-            console.print(millis(), DEC); console.print("\t\tTemperature = [");
-            printDouble(temperature, 2); console.println("]");
-#endif
             return temperature;
             break;
         }
@@ -1373,18 +1549,18 @@ double Receive(int field) {
 void Check_Start_Switch() {
     Start.update();
     if (Start.fell()) {
-        console.print(millis(), DEC); console.println("\t\tStart Button Pressed");
+        Write_Console_Message("\t\tStart Button Pressed");
         if (started) {
             if (RS485file) {
                 RS485file.close();
                 RS485file.flush();
             }
             started = false;
-            console.print(millis(), DEC); console.println("\t\tStandby Mode Started");
+            Write_Console_Message("\t\tStandby Mode Started");
         }
         else {
             started = true;
-            console.print(millis(), DEC); console.println("\t\tRunning Mode Started");
+            Write_Console_Message("\t\tRunning Mode Started");
         }
     }
 }
@@ -1393,10 +1569,7 @@ void Check_SD_Switch() {
     char SD_led_state = 0;
     SD_switch.update();                                                                // update wipe switch
     if (SD_switch.fell()) {
-        console.print(millis(), DEC);
-        console.println("\t\tSave/Wipe SD Button Pressed");
-        console.print(millis(), DEC);
-        console.println("\t\tPress Start Button to commence Save/Wipe Operation");
+        Write_Console_Message("SD Button Pressed");
         Running_led_state = digitalRead(Running_led_pin);                           // save the current state of the leds
         SD_led_state = digitalRead(SD_Active_led_pin);
         if (!started) {                                                             // do not allow Wipe if logging started
@@ -1406,13 +1579,17 @@ void Check_SD_Switch() {
                 Boot.update();
                 if (Boot.fell()) booted = true;                                     // WIPE + Boot = wipe directory
                 Reset.update();                                                     // reset will cancel the Wipe
-                if (Reset.fell()) ESP.restart();;
+                if (Reset.fell())
+                    Write_Console_Message("Reset Button Pressed"); {
+                    ESP.restart();
+                }
                 delay(150);
                 digitalWrite(Running_led_pin, LOW);                                 // turn the run led off
                 digitalWrite(SD_Active_led_pin, HIGH);                              // turn the sd led on
                 delay(150);
             } while (!started);
             if (booted) {
+                Write_Console_Message("Boot Button Pressed");
                 digitalWrite(SD_Active_led_pin, HIGH);
                 Wipe_Files();                                                       // delete all files on the SD, Rebooted when compete
             }
@@ -1420,7 +1597,7 @@ void Check_SD_Switch() {
             digitalWrite(SD_Active_led_pin, SD_led_state);
         }
         else {
-            console.print(millis(), DEC); console.println("\t\tWipe ONLY when not started");
+            Write_Console_Message("Wipe ONLY when not started");
         }
     }
 }
@@ -1436,18 +1613,18 @@ void Drive_Running_Led() {
 void Check_Reset_Switch() {
     Reset.update();
     if (Reset.fell()) {
-        console.print(millis(), DEC); console.println("\t\tReset Depressed");
+        Write_Console_Message("Reset Button Depressed");
         ESP.restart();
     }
 }
 void Check_Boot_Switch() {
     Boot.update();
     if (Boot.fell()) {
-        console.print(millis(), DEC); console.println("\t\tBoot Depressed");
+        Write_Console_Message("Boot Button Depressed");
         booted = true;
     }
     if (Boot.rose()) {
-        console.print(millis(), DEC); console.println("\t\tBoot Released");
+        Write_Console_Message("Boot Released");
         booted = false;
     }
     return;
@@ -1455,11 +1632,11 @@ void Check_Boot_Switch() {
 String GetDate(bool format) {
     int time_connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        console.print(millis(), DEC); console.print("\t\tFailed to obtain time ");
+        Write_Console_Message("Failed to obtain time ");
         delay(500);
-        console.print(".");
+        Write_Console_Message(".");
         if (time_connection_attempts > 20) {
-            console.print(millis(), DEC); console.print("\t\tTime Network Error, Restarting");
+            Write_Console_Message("Time Network Error, Restarting");
             ESP.restart();
         }
     }
@@ -1481,11 +1658,11 @@ String GetDate(bool format) {
 String GetTime(bool format) {
     int time_connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        console.print(millis(), DEC); console.println("\t\tFailed to obtain time");
+        Write_Console_Message("Failed to obtain time");
         delay(500);
-        console.print(".");
+        Write_Console_Message(".");
         if (time_connection_attempts > 20) {
-            console.print(millis(), DEC); console.print("\t\tTime Network Error, Restarting");
+            Write_Console_Message("Time Network Error, Restarting");
             ESP.restart();
         }
     }
@@ -1509,9 +1686,9 @@ void printDouble(double val, byte precision) {
     // precision is a number from 0 to 6 indicating the desired decimial places
     // example: printDouble( 3.1415, 2); // prints 3.14 (two decimal places)
 
-    console.print(int(val));  //prints the int part
+    temp_message = String(val);  //prints the int part
     if (precision > 0) {
-        console.print("."); // print the decimal point
+        temp_message += ("."); // print the decimal point
         unsigned long frac;
         unsigned long mult = 1;
         byte padding = precision - 1;
@@ -1526,9 +1703,10 @@ void printDouble(double val, byte precision) {
         while (frac1 /= 10)
             padding--;
         while (padding--)
-            console.print("0");
-        console.print(frac, DEC);
+            temp_message += "0";
+        temp_message += String(frac);
     }
+    Write_Console_Message(temp_message);
 }
 void SDprintDouble(double val, byte precision) {
     RS485file.print(int(val));  //prints the int part
