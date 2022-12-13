@@ -9,12 +9,8 @@ Change Record
 09/12/2022  9.1 Webpage Graphs now display 1 to 50Amps
 10/12/2022  9.2 Webpage Reset function added
 11/12/2022  9.3 SD saving and Webpage viewing of console messages added
-
 */
 String version = "V9.3";                                // software version number, shown on webpage
-// compilation switches -----------------------------------------------------------------------------------------------
-//#define VERBOSE       // Remove the // at the start of this line to print out on the console the annotated value from the KWS-AC301L
-#define DEBUG           // display messages on console
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -71,7 +67,7 @@ Bounce SD_switch = Bounce();
 Bounce Boot = Bounce();
 WebServer server(80);                   // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
-File RS485file;                         // Full data file, holds all readings from KWS-AC301L
+File Datafile;                         // Full data file, holds all readings from KWS-AC301L
 File Consolefile;
 // --------------------------------------------------------------------------------------------------------------------
 constexpr int Voltage = 0;
@@ -109,7 +105,7 @@ byte RS485_Requests[9][8] = {
                         {0x02,0x03,0x00,0x1A,0x00,0x01,0xA5,0xFE}           // Request temperature, in degrees centigrade
 };
 char print_buffer[80];
-String RS485FileName = "20220101";
+String DataFileName = "20220101";
 String ConsoleFileName = "20220101";
 String RS485_FieldNames[9] = {
                         "Volts",                    // [0]
@@ -123,9 +119,9 @@ String RS485_FieldNames[9] = {
                         "degC",                     // [8]
 };
 String FileNames[50];
-String RS485_Date;
-String RS485_Time;
-double RS485_Values[9] = {
+String Data_Date;
+String Data_Time;
+double Data_Values[9] = {
                         0.0,            // volts
                         0.0,            // amps
                         0.0,            // watts
@@ -138,13 +134,11 @@ double RS485_Values[9] = {
 };
 bool started = false;                                   // used to indicate run switch has been pressed and readings are being taken
 bool booted = false;
-bool debug = false;
-
 String site_width = "1060";                             // width of web page
 String site_height = "600";                             // height of web page
 int const table_size = 72;
-constexpr int console_table_size = 30;                  // number of lines to display on debug web page
-int       record_count, current_record_count, console_record_count, current_console_record_count;
+constexpr int console_table_size = 20;                  // number of lines to display on debug web page
+int       record_count, current_data_record_count, console_record_count, current_console_record_count;
 String    webpage, lastcall;
 String Last_Boot_Date = "11/11/2022 12:12:12";
 typedef struct {
@@ -165,7 +159,7 @@ record_type a_readings_table[table_size + 1];
 typedef struct {
     char ldate[11];         // date the message was taken
     char ltime[9];          // the time the message was taken
-    char milliseconds[10];  // the millis() value of the message    
+    unsigned long milliseconds;  // the millis() value of the message    
     char message[120];
 } console_record_type;
 console_record_type console_table[console_table_size + 1];
@@ -177,21 +171,22 @@ uint64_t SD_freespace = 0;
 uint64_t critical_SD_freespace = 0;
 double SD_freespace_double = 0;
 String temp_message;
+String console_message = "                                                                    ";
+bool Post_Setup_Status = false;
 int i = 0;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
     while (!console);                                                                    // wait for port to settle
     delay(4000);
-    Create_New_Console_File();
-    Write_Console_Message("Commencing Setup");
-    Write_Console_Message("Initializing Switches and LEDs");
+    console_message = "Commencing Setup";
+    Write_Console_Message();
+    pinMode(SD_Active_led_pin, OUTPUT);
     pinMode(Start_switch_pin, INPUT_PULLUP);
     pinMode(Reset_switch_pin, INPUT_PULLUP);
     pinMode(WipeSD_switch_pin, INPUT_PULLUP);
     pinMode(Boot_switch_pin, INPUT_PULLUP);
     pinMode(Running_led_pin, OUTPUT);
-    pinMode(SD_Active_led_pin, OUTPUT);
     Reset.attach(Reset_switch_pin);     // setup defaults for debouncing switches
     Start.attach(Start_switch_pin);
     SD_switch.attach(WipeSD_switch_pin);
@@ -204,48 +199,32 @@ void setup() {
     SD_switch.update();
     digitalWrite(Running_led_pin, LOW);
     digitalWrite(SD_Active_led_pin, LOW);
-    Write_Console_Message("Switches and LEDs Initialised");
     // WiFi and Web Setup -------------------------------------------------------------------------
-    Write_Console_Message("Starting WiFi");
     StartWiFi(ssid, password);                      // Start WiFi
-    Write_Console_Message("WiFi Started");
-    Write_Console_Message("Starting Time Server");
     StartTime();                                    // Start Time
-    Write_Console_Message("Time Started");
-    Write_Console_Message("Starting Web Server");
+    console_message = "Starting Server";
+    Write_Console_Message();
     server.begin();                                 // Start Webserver
-    Write_Console_Message("Server Started");
-    Write_Console_Message("WiFi IP Address: " + String(WiFi.localIP()));
-    server.on("/", Display);
-    server.on("/Start", Start_Readings);
-    server.on("/Display", Display);
-    server.on("/Download", Download);                       // download the current file
-    server.on("/Statistics", Statistics);                   // display statistics
-    server.on("/DownloadFiles", Download_Files);            // select a file to download
-    server.on("/GetFile", Download_File);                   // download the selectedfile
-    server.on("/DeleteFiles", Delete_Files);                // select a file to delete
-    server.on("/DelFile", Del_File);                        // delete the selected file
-    server.on("/AverageFiles", Average_Files);              // display hourly analysis of current file
-    server.on("/AverageFile", Average_File);                // analysis the selected file
-    server.on("/Reset", Web_Reset);                         // reset the orocessor from the webpage
-    server.on("/DebugToggle", Debug_Toggle);                // turn the saving of console messages on
-    server.on("/Debug", Debug_Show);                        // display the last 30 console messages on a webpage
-    server.begin();
-    Write_Console_Message("Webserver started");
-    // RS485 Setup --------------------------------------------------------------------------------
-    Write_Console_Message("Initialising RS485 Interface");
+    console_message = "Server Started";
+    Write_Console_Message();
+    server.on("/", Display);                        // nothing specified so display main web page
+    server.on("/Start", Start_Readings);            // start taking readings
+    server.on("/Display", Display);                 // display the main web page
+    server.on("/Statistics", Statistics);           // display statistics
+    server.on("/DownloadFiles", Download_Files);    // select a file to download
+    server.on("/GetFile", Download_File);           // download the selectedfile
+    server.on("/DeleteFiles", Delete_Files);        // select a file to delete
+    server.on("/DelFile", Del_File);                // delete the selected file
+    server.on("/AverageFiles", Average_Files);      // display hourly analysis of current file
+    server.on("/AverageFile", Average_File);        // analysis the selected file
+    server.on("/Reset", Web_Reset);                 // reset the orocessor from the webpage
+    server.on("/DebugShow", Debug_Show);            // display the last 30 console messages on a webpage
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
-    Write_Console_Message("RS485 Interface Initialised");
-    Write_Console_Message("SD Drive Configuration");
-    Write_Console_Message("SS pin:[" + String(SS) + "]");
-    Write_Console_Message("MOSI pin:[" + String(MOSI) + "]");
-    Write_Console_Message("MISO pin:[" + String(MISO) + "]");
-    Write_Console_Message("SCK pin:[" + String(SCK) + "]");
-    digitalWrite(SD_Active_led_pin, HIGH);
     if (!SD.begin(SS_pin)) {
-        Write_Console_Message("SD Drive Begin Failed @ line 244");
+        console_message = "SD Drive Begin Failed @ line 232";
+        Write_Console_Message();
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -254,10 +233,12 @@ void setup() {
         }
     }
     else {
-        Write_Console_Message("SD Drive Begin Succeeded");
+        console_message = "SD Drive Begin Succeeded";
+        Write_Console_Message();
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
-            Write_Console_Message("No SD card attached @ line 256");
+            console_message = "No SD Card Found @ line 246";
+            Write_Console_Message();
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -273,58 +254,38 @@ void setup() {
             card = "SDSC";
         }
         else if (cardType == CARD_SDHC) {
-            card = "SDHC";
+            card = "SDH//C";
         }
         else {
             card = "UNKNOWN";
         }
-        Write_Console_Message("SD Card Type: " + card);
+        console_message = "SD Card Type: " + card;
+        Write_Console_Message();
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
         critical_SD_freespace = cardSize * (uint64_t).9;
-        temp_message = "SD Card Size : " + String(cardSize) + "MBytes";
-        Write_Console_Message(temp_message);
-        temp_message = "SD Total Bytes : " + String(SD.totalBytes());
-        Write_Console_Message(temp_message);
-        temp_message = "SD Used bytes : " + String(SD.usedBytes());
-        Write_Console_Message("SD Card Initialisation Complete");
-        Write_Console_Message("Create Logging File");
+        console_message = "SD Card Size : " + String(cardSize) + "MBytes";
+        Write_Console_Message();
+        console_message = "SD Total Bytes : " + String(SD.totalBytes());
+        Write_Console_Message();
+        console_message = "SD Used bytes : " + String(SD.usedBytes());
+        Write_Console_Message();
+        console_message = "SD Card Initialisation Complete";
+        Write_Console_Message();
+        console_message = "Create Console Logging File";
+        Write_Console_Message();
     }
     Last_Boot_Date = GetDate(true) + " " + GetTime(true);
     This_Date = GetDate(false);
-    RS485FileName = GetDate(false) + ".csv";
-    Write_Console_Message("RS485 File Created: " + console.println(RS485FileName));
-    if (!SD.exists("/" + RS485FileName)) {
-        RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
-        if (!RS485file) {                                     // log file not opened
-            Write_Console_Message("Error opening RS485file: @ line 278 [" + String(RS485FileName) + "]");
-            while (true) {
-                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-                delay(500);
-                Check_Reset_Switch();
-            }
-        }
-        RS485file.print("Date,");                           // write first column header
-        RS485file.print("Time,");                           // write second column header
-        for (int x = 0; x < 8; x++) {                       // write data column headings into the SD file
-            RS485file.print(RS485_FieldNames[x]);
-            RS485file.print(",");
-        }
-        RS485file.println(RS485_FieldNames[8]);
-        RS485file.close();
-        RS485file.flush();
-        current_record_count = 0;
-        digitalWrite(SD_Active_led_pin, LOW);
-        Write_Console_Message("RS485 File Created" + String(RS485FileName));
-    }
-    else {
-        Write_Console_Message("RS485 File " + String(RS485FileName) + " already exists");
-        Prefill_Array();
-    }
-    Write_Console_Message("End of Setup");
-    Write_Console_Message("Running in Full Function Mode");
-    Write_Console_Message("Press Start Button to commence readings");
+    Create_New_Data_File();
+    Create_New_Console_File();
+    console_message = "End of Setup";
+    Write_Console_Message();
+    console_message = "Running in Full Function Mode";
+    Write_Console_Message();
+    console_message = "Press Start Button to commence readings";
+    Write_Console_Message();
     digitalWrite(SD_Active_led_pin, LOW);
+    Post_Setup_Status = true;
 }   // end of Setup
 void loop() {
     Check_Reset_Switch();                                           // check if reset switch has been pressed
@@ -337,54 +298,25 @@ void loop() {
             last_sensor_read = millis();                            // update the last read milli second reading  
             for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
                 Send_Request(i);                                    // send the RS485 Port the requests, one by one
-                RS485_Values[i] = Receive(i);                       // get the reply
+                Data_Values[i] = Receive(i);                        // get the reply
             }                                                       // all values should now be populated
-            RS485_Date = GetDate(true);                             // get the date of the reading
-            RS485_Time = GetTime(true);                             // get the time of the reading
+            Data_Date = GetDate(true);                              // get the date of the reading
+            Data_Time = GetTime(true);                              // get the time of the reading
             if (This_Date != GetDate(false)) {                      // has date changed
-                Create_New_RS485_Data_File();                       // so create a new Data File with new file name
+                Create_New_Data_File();                             // so create a new Data File with new file name
+                Create_New_Console_File();
             }
-            Write_New_RS485_Record_to_Data_File();                  // write the new record to SD Drive
-            Add_New_RS485_Record_to_Display_Table();                // add the record to the display table
+            Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
+            Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
         }                                                           // end of if millis >5000
     }                                                               // end of if started
 }                                                                   // end of loop
-void Create_New_RS485_Data_File() {
-    digitalWrite(SD_Active_led_pin, HIGH);              // turn the SD activity LED on
-    RS485FileName = GetDate(false) + ".csv";            // yes, so create a new file
-    Write_Console_Message("RS485 File Created: " + String(RS485FileName));
-    if (!SD.exists("/" + RS485FileName)) {
-        RS485file = SD.open("/" + RS485FileName, FILE_WRITE);
-        if (!RS485file) {                                     // log file not opened
-            Write_Console_Message("Error opening RS485file: [" + String(RS485FileName) + "]");
-            while (true) {
-                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-                delay(500);
-                Check_Reset_Switch();
-            }
-        }
-        RS485file.print("Date,");                           // write first column header
-        RS485file.print("Time,");                           // write second column header
-        for (int x = 0; x < 8; x++) {                       // write data column headings into the SD file
-            RS485file.print(RS485_FieldNames[x]);
-            RS485file.print(",");
-        }
-        RS485file.println(RS485FileName[8]);
-        RS485file.close();
-        RS485file.flush();
-        record_count = 0;                                   // zero the pointer used by the display table
-        largest_amperage = 0;                               // zero the record of the greatest amperage
-        current_record_count = 0;                           // zero the count because this is a new file
-        Write_Console_Message("RS485 File Created");
-    }
-    digitalWrite(SD_Active_led_pin, LOW);                  // turn the SD activity LED off
-}
-void Write_New_RS485_Record_to_Data_File() {
-    digitalWrite(SD_Active_led_pin, HIGH);                      // turn the SD activity LED on
-    RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
-    if (!RS485file) {                                           // oops - file not available!
-        Write_Console_Message("Error re-opening RS485file:" + String(RS485FileName));
+void Write_New_Data_Record_to_Data_File() {
+    digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
+    Datafile = SD.open("/" + DataFileName, FILE_APPEND);            // open the SD file
+    if (!Datafile) {                                                // oops - file not available!
+        console_message = "Error re-opening Datafile:" + String(DataFileName);
+        Write_Console_Message();
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -393,40 +325,40 @@ void Write_New_RS485_Record_to_Data_File() {
         }
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
-    RS485file.print(RS485_Date); RS485file.print(",");          // dd/mm/yyyy,
-    RS485file.print(RS485_Time); RS485file.print(",");          // dd/mm/yyyy,hh:mm:ss,
-    SDprintDouble(RS485_Values[0], 1); RS485file.print(",");    // voltage
-    SDprintDouble(RS485_Values[1], 3); RS485file.print(",");    // amperage
-    SDprintDouble(RS485_Values[2], 2); RS485file.print(",");    // wattage
-    SDprintDouble(RS485_Values[3], 1); RS485file.print(",");    // up time
-    SDprintDouble(RS485_Values[4], 3); RS485file.print(",");    // kilowatt hour
-    SDprintDouble(RS485_Values[5], 2); RS485file.print(",");    // power factor
-    SDprintDouble(RS485_Values[6], 1); RS485file.print(",");    // unknown
-    SDprintDouble(RS485_Values[7], 1); RS485file.print(",");    // frequency
-    SDprintDouble(RS485_Values[8], 1);                          // temperature
-    RS485file.print("\n");                                      // end of record
-    RS485file.close();                                          // close the sd file
-    RS485file.flush();                                          // make sure it has been written to SD
+    Datafile.print(Data_Date); Datafile.print(",");          // dd/mm/yyyy,
+    Datafile.print(Data_Time); Datafile.print(",");          // dd/mm/yyyy,hh:mm:ss,
+    SDprintDouble(Data_Values[0], 1); Datafile.print(",");    // voltage
+    SDprintDouble(Data_Values[1], 3); Datafile.print(",");    // amperage
+    SDprintDouble(Data_Values[2], 2); Datafile.print(",");    // wattage
+    SDprintDouble(Data_Values[3], 1); Datafile.print(",");    // up time
+    SDprintDouble(Data_Values[4], 3); Datafile.print(",");    // kilowatt hour
+    SDprintDouble(Data_Values[5], 2); Datafile.print(",");    // power factor
+    SDprintDouble(Data_Values[6], 1); Datafile.print(",");    // unknown
+    SDprintDouble(Data_Values[7], 1); Datafile.print(",");    // frequency
+    SDprintDouble(Data_Values[8], 1);                          // temperature
+    Datafile.print("\n");                                      // end of record
+    Datafile.close();                                          // close the sd file
+    Datafile.flush();                                          // make sure it has been written to SD
     digitalWrite(SD_Active_led_pin, LOW);
-    if (RS485_Values[1] >= largest_amperage) {                  // load the maximum amperage value
-        for (i = 0; i <= RS485_Date.length() + 1; i++) {                              // load the date
-            date_of_largest_amperage[i] = RS485_Date[i];
+    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
+        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
+            date_of_largest_amperage[i] = Data_Date[i];
         }
-        for (i = 0; i <= RS485_Time.length() + 1; i++) {                               // load the time
-            time_of_largest_amperage[i] = RS485_Time[i];
+        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+            time_of_largest_amperage[i] = Data_Time[i];
         }
-        largest_amperage = RS485_Values[1];                     // update the largest current value
+        largest_amperage = Data_Values[1];                     // update the largest current value
     }
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
-        Write_Console_Message("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+        console_message = "\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
+        Write_Console_Message();
     }
     record_count++;                                             // increment the record count, the array pointer
-    current_record_count++;                                     // increment the current record count
+    current_data_record_count++;                                     // increment the current record count
     digitalWrite(SD_Active_led_pin, LOW);                       // turn the SD activity LED on
-    Write_Console_Message("Record Added to Data File");
 }
-void Add_New_RS485_Record_to_Display_Table() {
+void Add_New_Data_Record_to_Display_Table() {
     if (record_count > table_size) {                            // table full, shuffle fifo
         record_count = table_size;
         for (i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
@@ -443,50 +375,49 @@ void Add_New_RS485_Record_to_Display_Table() {
             readings_table[i].temperature = readings_table[i + 1].temperature;      // temperature
         }
         record_count = table_size;                                                  // subsequent records will be added at the end of the table
-        for (i = 0; i <= RS485_Date.length() + 1; i++) {
-            readings_table[table_size].ldate[i] = RS485_Date[i];
+        for (i = 0; i <= Data_Date.length() + 1; i++) {
+            readings_table[table_size].ldate[i] = Data_Date[i];
         }                                                                           // write the new reading to the end of the table
-        for (i = 0; i <= RS485_Time.length() + 1; i++) {
-            readings_table[table_size].ltime[i] = RS485_Time[i];
+        for (i = 0; i <= Data_Time.length() + 1; i++) {
+            readings_table[table_size].ltime[i] = Data_Time[i];
         }
-        readings_table[table_size].voltage = RS485_Values[Voltage];
-        readings_table[table_size].amperage = RS485_Values[Amperage];
-        readings_table[table_size].wattage = RS485_Values[Wattage];                 // write the watts value into the table
-        readings_table[table_size].uptime = RS485_Values[UpTime];
-        readings_table[table_size].kilowatthour = RS485_Values[Kilowatthour];
-        readings_table[table_size].powerfactor = RS485_Values[PowerFactor];
-        readings_table[table_size].unknown = RS485_Values[Unknown];
-        readings_table[table_size].frequency = RS485_Values[Frequency];
-        readings_table[table_size].temperature = RS485_Values[Temperature];
+        readings_table[table_size].voltage = Data_Values[Voltage];
+        readings_table[table_size].amperage = Data_Values[Amperage];
+        readings_table[table_size].wattage = Data_Values[Wattage];                 // write the watts value into the table
+        readings_table[table_size].uptime = Data_Values[UpTime];
+        readings_table[table_size].kilowatthour = Data_Values[Kilowatthour];
+        readings_table[table_size].powerfactor = Data_Values[PowerFactor];
+        readings_table[table_size].unknown = Data_Values[Unknown];
+        readings_table[table_size].frequency = Data_Values[Frequency];
+        readings_table[table_size].temperature = Data_Values[Temperature];
     }
     else {                                                                          // add the record to the table
-        for (i = 0; i <= RS485_Date.length() + 1; i++) {
-            readings_table[record_count].ldate[i] = RS485_Date[i];
+        for (i = 0; i <= Data_Date.length() + 1; i++) {
+            readings_table[record_count].ldate[i] = Data_Date[i];
         }                                                                         // write the new reading to the end of the table
-        for (i = 0; i <= RS485_Time.length() + 1; i++) {
-            readings_table[record_count].ltime[i] = RS485_Time[i];
+        for (i = 0; i <= Data_Time.length() + 1; i++) {
+            readings_table[record_count].ltime[i] = Data_Time[i];
         }
-        readings_table[record_count].voltage = RS485_Values[Voltage];
-        readings_table[record_count].amperage = RS485_Values[Amperage];
-        readings_table[record_count].wattage = RS485_Values[Wattage];
-        readings_table[record_count].uptime = RS485_Values[UpTime];
-        readings_table[record_count].kilowatthour = RS485_Values[Kilowatthour];
-        readings_table[record_count].powerfactor = RS485_Values[PowerFactor];
-        readings_table[record_count].unknown = RS485_Values[Unknown];
-        readings_table[record_count].frequency = RS485_Values[Frequency];
-        readings_table[record_count].temperature = RS485_Values[Temperature];
+        readings_table[record_count].voltage = Data_Values[Voltage];
+        readings_table[record_count].amperage = Data_Values[Amperage];
+        readings_table[record_count].wattage = Data_Values[Wattage];
+        readings_table[record_count].uptime = Data_Values[UpTime];
+        readings_table[record_count].kilowatthour = Data_Values[Kilowatthour];
+        readings_table[record_count].powerfactor = Data_Values[PowerFactor];
+        readings_table[record_count].unknown = Data_Values[Unknown];
+        readings_table[record_count].frequency = Data_Values[Frequency];
+        readings_table[record_count].temperature = Data_Values[Temperature];
     }                                                                           // end of if record_count > table_size
-    Write_Console_Message("Record Added to Data Table");
 }
 void Create_New_Console_File() {
     char milliseconds[10];
-    digitalWrite(SD_Active_led_pin, HIGH);                  // turn the SD activity LED on
-    ConsoleFileName = GetDate(false) + ".txt";              // yes, so create a new file
-    Write_Console_Message("Console File Created: " + String(ConsoleFileName));
+    digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
+    ConsoleFileName = GetDate(false) + ".txt";                      // yes, so create a new file
     if (!SD.exists("/" + ConsoleFileName)) {
         Consolefile = SD.open("/" + ConsoleFileName, FILE_WRITE);
-        if (!Consolefile) {                                     // log file not opened
-            Write_Console_Message("Error opening Console file: [" + String(ConsoleFileName) + "]");
+        if (!Consolefile) {                                         // log file not opened
+            console_message = "Error opening Console file: [" + String(ConsoleFileName) + "]";
+            Write_Console_Message();
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -494,183 +425,227 @@ void Create_New_Console_File() {
                 Check_Reset_Switch();
             }
         }
-        ltoa(millis(), milliseconds, 10);
-        Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + (String)milliseconds + ",Console Log File Started");
+        Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + milliseconds + ",Console File Started");
         Consolefile.close();
         Consolefile.flush();
         console_record_count = 1;
-        Write_Console_Message("Console File Created");
+    }
+    else {
+        console_message = "Console File " + String(ConsoleFileName) + " already exists";
+        Write_Console_Message();
+        Prefill_Console_Array();
     }
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
 }
-void Write_Console_Message(String message) {
+void Create_New_Data_File() {
+    DataFileName = GetDate(false) + ".csv";
+    digitalWrite(SD_Active_led_pin, HIGH);
+    if (!SD.exists("/" + DataFileName)) {
+        Datafile = SD.open("/" + DataFileName, FILE_WRITE);
+        if (!Datafile) {                                            // log file not opened
+            console_message = "Error opening Data file @ line 324 [" + String(DataFileName) + "]";
+            Write_Console_Message();
+            while (true) {
+                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+                delay(500);
+                Check_Reset_Switch();
+            }
+        }
+        Datafile.print("Date,");                                    // write first column header
+        Datafile.print("Time,");                                    // write second column header
+        for (int x = 0; x < 8; x++) {                               // write data column headings into the SD file
+            Datafile.print(RS485_FieldNames[x]);
+            Datafile.print(",");
+        }
+        Datafile.println(RS485_FieldNames[8]);
+        Datafile.close();
+        Datafile.flush();
+        current_data_record_count = 0;
+        digitalWrite(SD_Active_led_pin, LOW);
+        console_message = "Data File Created " + DataFileName;
+        Write_Console_Message();
+    }
+    else {
+        console_message = "Data File " + String(DataFileName) + " already exists";
+        Write_Console_Message();
+        Prefill_Array();
+    }
+}
+void Write_Console_Message() {
     String Date;
     String Time;
-    char mseconds[10];
-    String Milliseconds;
-    int x = 0;
-    ltoa(millis(), mseconds, 10);                               // convert millis() (unsigned long) into character array
-    for (x = 0; x <= 10; x++) {                                     // convert character array into a String
-        Milliseconds[x] = mseconds[x];
+    unsigned long milliseconds = millis();
+    if (Post_Setup_Status) {                                        // only write the console message to disk once setup is complete
+        Date = GetDate(true);
+        Time = GetTime(true);
+        Write_New_Console_Message_to_Console_File(Date, Time, milliseconds);
+        Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds);
     }
-    Milliseconds[x] = '\0';                                                 // terminate the string
-#ifdef DEBUG                                                        // only write to console if DEBUG defined
-    console.print(Milliseconds); console.println("\tmessage");
-#endif
-    Date = GetDate(true);
-    Time = GetTime(true);
-    Write_New_Console_Message_to_Console_File(Date, Time, Milliseconds, message);             // but always write to debug file
-    Add_New_Console_Message_to_Console_Table(Date, Time, Milliseconds, message);              // and add the message to the web page
+    console.print(millis(), DEC); console.print("\t"); console.println(console_message);
 }
-void Write_New_Console_Message_to_Console_File(String date, String time, String milliseconds, String message) {
-    digitalWrite(SD_Active_led_pin, HIGH);                              // turn the SD activity LED on
-    Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);          // open the SD file
-    if (!Consolefile) {                                                 // oops - file not available!
-        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
+void Write_New_Console_Message_to_Console_File(String date, String time, unsigned long milliseconds) {
+    digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
+    Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);      // open the SD file
+    if (!Consolefile) {                                             // oops - file not available!
+        console_message = "Error re-opening Console file: " + String(ConsoleFileName);
+        Write_Console_Message();
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
             delay(500);
-            Check_Reset_Switch();                                       // Reset will restart the processor so no return
+            Check_Reset_Switch();                                   // Reset will restart the processor so no return
         }
     }
-    Consolefile.println(date + "," + time + "," + milliseconds + "," + message);
-    Consolefile.close();                                                // close the sd file
-    Consolefile.flush();                                                // make sure it has been written to SD
+    Consolefile.print(date);
+    Consolefile.print(",");
+    Consolefile.print(time);
+    Consolefile.print(",");
+    Consolefile.print(milliseconds);
+    Consolefile.print(",");
+    Consolefile.println(console_message);
+    Consolefile.close();                                            // close the sd file
+    Consolefile.flush();                                            // make sure it has been written to SD
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
-        Write_Console_Message("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
-    }
-    digitalWrite(SD_Active_led_pin, LOW);                               // turn the SD activity LED off
-    Write_Console_Message("Record Added to Data File");
-}
-void Add_New_Console_Message_to_Console_Table(String date, String time, String milliseconds, String message) {
-    if (console_record_count > console_table_size) {                            // table full, shuffle fifo
-        for (int x = 0; x < console_table_size; x++) {                          // shuffle the rows up, losing row 0, make row [table_size] free
-            for (i = 0; i <= 11; i++) {                                         // write the new message date onto the end of the table
-                console_table[x].ldate[i] = console_table[x + 1].ldate[i];
-            }
-            for (i = 0; i <= 9; i++) {                                          // write the new message time onto the end of the table
-                console_table[x].ltime[i] = console_table[x + 1].ltime[i];
-            }
-            for (i = 0; i <= 10; i++) {
-                console_table[x].milliseconds[i] = console_table[x + 1].milliseconds[i];
-            }
-            for (i = 0; i <= 10; i++) {
-                console_table[x].message[i] = console_table[x + 1].message[i];  // write the new message onto the end of the table
-            }
-
+        for (int x = 0; x < console_message.length(); x++) {        // reserve the current console_message
+            temp_message[x] = console_message[x];
         }
-        console_record_count = console_table_size;                              // subsequent records will be added at the end of the table
-        for (i = 0; i <= date.length() + 1; i++) {                              // write the new message date onto the end of the table
+        console_message = "WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
+        Write_Console_Message();
+        for (int x = 0; x < temp_message.length(); x++) {            // restore the console_message
+            console_message[x] = temp_message[x];
+        }
+    }
+    digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
+}
+void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned long milliseconds) {
+    if (console_record_count > console_table_size) {                                // table full, shuffle fifo
+        for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
+            strcpy(console_table[i].ldate, console_table[i + 1].ldate);             // date
+            strcpy(console_table[i].ltime, console_table[i + 1].ltime);             // time
+            console_table[i].milliseconds = console_table[i + 1].milliseconds;
+            strcpy(console_table[i].message, console_table[i + 1].message);
+        }
+        console_record_count = console_table_size;               // subsequent records will be added at the end of the table
+        for (i = 0; i < 10; i++) {                              // write the new message date (string) onto the end of the table Char array
             console_table[console_table_size].ldate[i] = date[i];
         }
-        for (i = 0; i <= time.length() + 1; i++) {                              // write the new message time onto the end of the table
+        for (i = 0; i < 8; i++) {                              // write the new message time onto the end of the table
             console_table[console_table_size].ltime[i] = time[i];
         }
-        for (i = 0; i <= milliseconds.length() + 1; i++) {
-            console_table[console_table_size].milliseconds[i] = milliseconds[i];
-        }
-        for (i = 0; i <= message.length() + 1; i++) {
-            console_table[console_table_size].message[i] = message[i];   // write the new message onto the end of the table
+        console_table[console_table_size].milliseconds = milliseconds;
+        for (i = 0; i <= 119; i++) {
+            console_table[console_table_size].message[i] = console_message[i];   // write the new message onto the end of the table
+            if (console_table[console_table_size].message[i] == '\0') break;
         }
     }
     else {                                                                      // add the record to the table
-        for (i = 0; i <= date.length() + 1; i++) {
+        for (i = 0; i < 10; i++) {
             console_table[console_record_count].ldate[i] = date[i];
         }                                                                       // write the new reading to the end of the table
-        for (i = 0; i <= time.length() + 1; i++) {
+        for (i = 0; i < 8; i++) {
             console_table[console_record_count].ltime[i] = time[i];
         }
-        for (i = 0; i <= milliseconds.length() + 1; i++) {
-            console_table[console_record_count].milliseconds[i] = milliseconds[i];
-        }
-        for (i = 0; i <= message.length() + 1; i++) {
-            console_table[console_record_count].message[i] = message[i];      // write the new message onto the end of the table
+        console_table[console_record_count].milliseconds = milliseconds;
+        for (i = 0; i < 119; i++) {
+            console_table[console_record_count].message[i] = console_message[i];      // write the new message onto the end of the table
+            if (console_table[console_record_count].message[i] == '\0') break;
         }
     }
     console_record_count++;                                                     // increment the console record count
-    Write_Console_Message("Record Added to Console Table");
 }
 int StartWiFi(const char* ssid, const char* password) {
-    Write_Console_Message("Connecting to " + String(ssid));
+    console_message = "WiFi Connecting to " + String(ssid);
+    Write_Console_Message();
     WiFi.begin(ssid, password);
-    Write_Console_Message("WiFi Status: " + String(WiFi.status()));
+    console_message = "WiFi Status: " + String(WiFi.status());
+    Write_Console_Message();
     int wifi_connection_attempts = 0;
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
-        Write_Console_Message(".");
+        console_message = "Connection attempt " + String(wifi_connection_attempts);
+        Write_Console_Message();
         if (wifi_connection_attempts++ > 20) {
-            Write_Console_Message("Network Error, Restarting");
+            console_message = "Network Error, Restarting";
+            Write_Console_Message();
             ESP.restart();
         }
     }
-    Write_Console_Message("Connected");
+    console_message = "Wifi Connected";
+    Write_Console_Message();
+    console_message = "WiFi IP Address: " + String(WiFi.localIP().toString().c_str());
+    Write_Console_Message();
     return true;
 }
 void StartTime() {
+    console_message = "Starting Time Server";
+    Write_Console_Message();
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    console_message = "Time Server Started";
+    Write_Console_Message();
 }
 void Prefill_Array() {
-    int character_count = 0;
-    char csvField[3];
-    int fieldNo = 1;
-    char temp;
-    current_record_count = 0;
+    int datacharacter_count = 0;
+    char dataField[20];
+    int datafieldNo = 1;
+    char datatemp;
+    current_data_record_count = 0;
     digitalWrite(SD_Active_led_pin, HIGH);
-    File csvFile = SD.open("/" + RS485FileName, FILE_READ);
-    if (csvFile) {
-        while (csvFile.available()) {                                           // throw the first row, column headers, away
-            temp = csvFile.read();
-            if (temp == '\n') break;
+    File dataFile = SD.open("/" + DataFileName, FILE_READ);
+    if (dataFile) {
+        while (dataFile.available()) {                                           // throw the first row, column headers, away
+            datatemp = dataFile.read();
+            if (datatemp == '\n') break;
         }
-        Write_Console_Message("Loading datafile from " + String(RS485FileName));
-        while (csvFile.available()) {                                           // do while there are data available
-            temp = csvFile.read();
-            csvField[character_count++] = temp;                                 // add it to the csvfield string
-            if (temp == ',' || temp == '\n') {                                  // look for end of field
-                csvField[character_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
-                switch (fieldNo) {
+        console_message = "Loading datafile from " + String(DataFileName);
+        Write_Console_Message();
+        while (dataFile.available()) {                                           // do while there are data available
+            datatemp = dataFile.read();
+            dataField[datacharacter_count++] = datatemp;                            // add it to the csvfield string
+            if (datatemp == ',' || datatemp == '\n') {                                  // look for end of field
+                dataField[datacharacter_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
+                switch (datafieldNo) {
                 case 1:
-                    strcpy(readings_table[record_count].ldate, csvField);       // Date
+                    strcpy(readings_table[record_count].ldate, dataField);       // Date
                     break;
                 case 2:
-                    strcpy(readings_table[record_count].ltime, csvField);       // Time
+                    strcpy(readings_table[record_count].ltime, dataField);       // Time
                     break;
                 case 3:
-                    readings_table[record_count].voltage = atof(csvField);      // Voltage
+                    readings_table[record_count].voltage = atof(dataField);      // Voltage
                     break;
                 case 4:
-                    readings_table[record_count].amperage = atof(csvField);     // Amperage
+                    readings_table[record_count].amperage = atof(dataField);     // Amperage
                     break;
                 case 5:
-                    readings_table[record_count].wattage = atof(csvField);      // Wattage
+                    readings_table[record_count].wattage = atof(dataField);      // Wattage
                     break;
                 case 6:
-                    readings_table[record_count].uptime = atof(csvField);       // Up Time
+                    readings_table[record_count].uptime = atof(dataField);       // Up Time
                     break;
                 case 7:
-                    readings_table[record_count].kilowatthour = atof(csvField); // KiloWatt Hour
+                    readings_table[record_count].kilowatthour = atof(dataField); // KiloWatt Hour
                     break;
                 case 8:
-                    readings_table[record_count].powerfactor = atof(csvField);  // Power Factor
+                    readings_table[record_count].powerfactor = atof(dataField);  // Power Factor
                     break;
                 case 9:
-                    readings_table[record_count].unknown = atof(csvField);      // Unknown
+                    readings_table[record_count].unknown = atof(dataField);      // Unknown
                     break;
                 case 10:
-                    readings_table[record_count].frequency = atof(csvField);    // Frequency
+                    readings_table[record_count].frequency = atof(dataField);    // Frequency
                     break;
                 case 11:
-                    readings_table[record_count].temperature = atof(csvField);  // Temperature
+                    readings_table[record_count].temperature = atof(dataField);  // Temperature
                 }
-                fieldNo++;
-                csvField[0] = '\0';
-                character_count = 0;
+                datafieldNo++;
+                dataField[0] = '\0';
+                datacharacter_count = 0;
             }
-            if (temp == '\n') {                                                                 // end of sd data row
+            if (datatemp == '\n') {                                                             // end of sd data row
                 record_count++;                                                                 // increment array pointer
-                current_record_count++;                                                         // increment the current_record count
+                current_data_record_count++;                                                    // increment the current_record count
                 if (record_count > table_size) {                                                // if pointer is greater than table size
                     for (int i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
                         strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
@@ -687,67 +662,71 @@ void Prefill_Array() {
                     }
                     record_count = table_size;                                                  // subsequent records will be added at the end of the table
                 }
-                fieldNo = 1;
+                datafieldNo = 1;
             }
         } // end of while
     }
-    csvFile.close();
+    dataFile.close();
     digitalWrite(SD_Active_led_pin, LOW);
 }
 void Prefill_Console_Array() {
-    int character_count = 0;
-    char txtField[3];
-    int fieldNo = 1;
-    char temp;
+    int console_character_count = 0;
+    char console_txtField[120];
+    int console_fieldNo = 1;
+    char console_temp;
     current_console_record_count = 0;
     digitalWrite(SD_Active_led_pin, HIGH);
-    File txtFile = SD.open("/" + ConsoleFileName, FILE_READ);
-    if (txtFile) {
-        Write_Console_Message("Loading console file from " + String(ConsoleFileName));
-        while (txtFile.available()) {                                           // do while there are data available
-            temp = txtFile.read();
-            txtField[character_count++] = temp;                                 // add it to the csvfield string
-            if (temp == ',' || temp == '\n') {                                  // look for end of field
-                txtField[character_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
-                switch (fieldNo) {
+    File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
+    if (consoleFile) {
+        console_message = "Loading console file from " + String(ConsoleFileName);
+        Write_Console_Message();
+        while (consoleFile.available()) {                                       // do while there are data available
+            console_temp = consoleFile.read();                                  // read a character from the file
+            console_txtField[console_character_count++] = console_temp;         // add it to the consolefield string
+            if (console_temp == ',' || console_temp == '\n') {                  // look for end of field
+                if (console_fieldNo != 3) {                                     // field 3 is not a string, it is a long
+                    console_txtField[console_character_count - 1] = '\0';       // so do not terminate it with a /0
+                }                                                               // insert termination character where the ',' or '\n' was
+                switch (console_fieldNo) {
                 case 1:
-                    strcpy(console_table[console_record_count].ldate, txtField);        // Date
+                    strcpy(console_table[console_record_count].ldate, console_txtField);        // Date
                     break;
                 case 2:
-                    strcpy(console_table[console_record_count].ltime, txtField);        // Time
+                    strcpy(console_table[console_record_count].ltime, console_txtField);        // Time
                     break;
                 case 3:
-                    strcpy(console_table[console_record_count].milliseconds, txtField); // milliseconds
+                    console_table[console_record_count].milliseconds = atof(console_txtField); // milliseconds
                     break;
                 case 4:
-                    strcpy(console_table[console_record_count].message, txtField);      // message
+                    strcpy(console_table[console_record_count].message, console_txtField);      // message
                     break;
                 }
-                fieldNo++;
-                txtField[0] = '\0';
-                character_count = 0;
+                console_fieldNo++;
+                console_txtField[0] = '\0';
+                console_character_count = 0;
             }
-            if (temp == '\n') {                                                                 // end of sd data row
+            if (console_temp == '\n') {                                                         // end of sd data row
                 console_record_count++;                                                         // increment array pointer
                 current_console_record_count++;                                                 // increment the current_record count
-                if (record_count > table_size) {                                                // if pointer is greater than table size
-                    for (int i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
+                if (console_record_count > console_table_size) {                                // if pointer is greater than table size
+                    for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
                         strcpy(console_table[i].ldate, console_table[i + 1].ldate);             // date
                         strcpy(console_table[i].ltime, console_table[i + 1].ltime);             // time
-                        strcpy(console_table[i].milliseconds, console_table[i + 1].milliseconds);
+                        console_table[i].milliseconds = console_table[i + 1].milliseconds;
                         strcpy(console_table[i].message, console_table[i + 1].message);
                     }
                     console_record_count = console_table_size;                                                  // subsequent records will be added at the end of the table
                 }
-                fieldNo = 1;
+                console_fieldNo = 1;
             }
         } // end of while
     }
-    txtFile.close();
+    consoleFile.close();
+    console_message = "Loaded Console Records: " + String(current_console_record_count);
+    Write_Console_Message();
     digitalWrite(SD_Active_led_pin, LOW);
 }
 void Display() {
-    Write_Console_Message("Start of Display Channels");
     String log_time;
     log_time = "Time";
     webpage = "";                           // don't delete this command, it ensures the server works reliably!
@@ -798,14 +777,17 @@ void Display() {
     server.send(200, "text/html", webpage);
     webpage = "";
     lastcall = "display";
-    Write_Console_Message("End of Display Wattage");
 }
 void Start_Readings() {
+    console_message = "Readings Started via Web Command";
+    Write_Console_Message();
     started = true;
     webpage = "";
     Display();
 }
 void Web_Reset() {
+    console_message = "Processor Reset via Web Command";
+    Write_Console_Message();
     ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
@@ -853,7 +835,6 @@ void Page_Footer() {
     // <ul> start -----------------------------------------------------------------------------------------------------
     webpage += F("<ul>");
     if (!started) {
-        Write_Console_Message("Readings not started");
         webpage += F("<li>");
         webpage += F("<span ");
         webpage += F("style='color:#e03e2d;'>");
@@ -865,7 +846,6 @@ void Page_Footer() {
         webpage += F("</li>");
     }
     else {
-        Write_Console_Message("Readings started");
         webpage += F("<li>");
         webpage += F("<span ");
         webpage += F("style='color:#e03e2d;'>");
@@ -881,65 +861,22 @@ void Page_Footer() {
     }
     webpage += F("<li><a href='/Display'>Webpage</a> </li>");
     webpage += F("<li><a href='/Statistics'>Display Statistics</a></li>");
-    webpage += F("<li><a href='/Download'>Download Current File</a></li>");
     webpage += F("<li><a href='/DownloadFiles'>Download Files</a></li>");
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
     webpage += F("<li><a href='/AverageFiles'>Average Files</a></li>");
     webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
-    if (!debug) {
-        Write_Console_Message("Debug not started");
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/DebugToggle' >Toggle Debug");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
-    else {
-        Write_Console_Message("Debug started");
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/DebugToggle'>");
-        webpage += F("<span ");
-        webpage += F("style='color:#000000;'>Toggle Debug");
-        webpage += F("</span>");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
-    if (!debug) {
-        Write_Console_Message("Debug show not started");
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/DebugShow' >Show Debug");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
-    else {
-        Write_Console_Message("Debug Show started");
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/DebugSHow'>");
-        webpage += F("<span ");
-        webpage += F("style='color:#000000;'>Show Debug");
-        webpage += F("</span>");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
+    webpage += F("<li>");
+    webpage += F("<span ");
+    webpage += F("style='color:#e03e2d;'>");
+    webpage += F("<a ");
+    webpage += F("style='color:#e03e2d;");
+    webpage += F("'href='/DebugShow'>");
+    webpage += F("<span ");
+    webpage += F("style='color:#000000;'>Show Console");
+    webpage += F("</span>");
+    webpage += F("</a>");
+    webpage += F("</span>");
+    webpage += F("</li>");
     // </ul> end ------------------------------------------------------------------------------------------------------
     webpage += F("</ul>");
     // <footer> start -------------------------------------------------------------------------------------------------
@@ -967,35 +904,15 @@ void Page_Footer() {
     // </html> end ----------------------------------------------------------------------------------------------------
     webpage += F("</html>");
 }
-void Download() {                                               // download, to PC accessing webpage, the current datafile
-    Write_Console_Message("Start of Log Download");
-    if (started) {
-        File datafile = SD.open("/" + RS485FileName, FILE_READ);    // Now read data from FS
-        if (datafile) {                                             // if there is a file
-            if (datafile.available()) {                             // If data is available and present
-                String contentType = "application/octet-stream";
-                server.sendHeader("Content-Disposition", "attachment; filename=" + RS485FileName);
-                if (server.streamFile(datafile, contentType) != datafile.size()) {
-                    Write_Console_Message("Sent less data than expected");
-                }
-            }
-        }
-        datafile.close(); // close the file:
-    }
-    else {
-        Write_Console_Message("Logging not started, no current file");
-    }
-    Write_Console_Message("End of Log View");
-    webpage = "";
-    Display();
-}
-void Statistics() {  // Display file size of the datalog file
+void Statistics() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    Write_Console_Message("Start of Log Stats");
+    console_message = "Statistics Requested via Webpage";
+    Write_Console_Message();
     if (!started) {
-        RS485file = SD.open("/" + RS485FileName, FILE_APPEND);      // open the SD file
-        if (!RS485file) {                                                               // oops - file not available!
-            Write_Console_Message("Error re-opening RS485file: " + RS485FileName);
+        Datafile = SD.open("/" + DataFileName, FILE_APPEND);      // open the SD file
+        if (!Datafile) {                                                               // oops - file not available!
+            console_message = "Error re-opening Datafile: " + DataFileName;
+            Write_Console_Message();
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -1007,17 +924,21 @@ void Statistics() {  // Display file size of the datalog file
     }
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Statistics");
-    File datafile = SD.open("/" + RS485FileName, FILE_READ);  // Now read data from FS
-    // <p style="text-align: left; color: blue,bold:true; font-size: 24px;">Current Data Log file size = 100 Bytes</p>
-    // <p style = "text-align: center;"><strong><span style = "color: red;">Freespace on bottom row< / span>< / strong>< / p>
+    File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
     webpage += F("<p ");
     webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
     webpage += F(">Current Data Log file size = ");
     webpage += String(datafile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
+    File consolefile = SD.open("/" + ConsoleFileName, FILE_READ);  // Now read data from FS
+    webpage += F("<p ");
+    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+    webpage += F(">Current Console Log file size = ");
+    webpage += String(consolefile.size());
+    webpage += F(" Bytes");
+    webpage += "</span></strong></p>";
     if (SD_freespace < critical_SD_freespace) {
-        console.print(millis(), DEC); console.println("\t\tFreespace less than critical");
         webpage += F("<p ");
         webpage += F("style='text-align:left;'><strong><span style='color:red;bold:true;font-size:24px'");
         webpage += F("'>SD Free Space = ");
@@ -1026,7 +947,6 @@ void Statistics() {  // Display file size of the datalog file
         webpage += "</span></strong></p>";
     }
     else {
-        Write_Console_Message("Freespace => critical");
         webpage += F("<p ");
         webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px'");
         webpage += F("'>SD Free Space = ");
@@ -1042,7 +962,7 @@ void Statistics() {  // Display file size of the datalog file
     webpage += F("<p ");
     webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
     webpage += F("'>Number of readings = ");
-    webpage += String(current_record_count);
+    webpage += String(current_data_record_count);
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
@@ -1060,12 +980,12 @@ void Statistics() {  // Display file size of the datalog file
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Write_Console_Message("End of Log Stats");
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    Write_Console_Message("Start of List Files");
-    webpage = ""; // don't delete this command, it ensures the server works reliably!
+    console_message = "Download of Files Requested via Webpage";
+    Write_Console_Message();
+    webpage = "";
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
         webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
@@ -1075,48 +995,58 @@ void Download_Files() {
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Write_Console_Message("End of List Files");
 }
 void Download_File() {                                                          // download the selected file
-    Write_Console_Message("Get File Requested");
     String fileName = server.arg("file");
-    Write_Console_Message("File Name = " + fileName);
+    console_message = "Download of File " + fileName + " Requested via Webpage";
+    Write_Console_Message();
     File datafile = SD.open("/" + fileName, FILE_READ);    // Now read data from FS
     if (datafile) {                                             // if there is a file
         if (datafile.available()) {                             // If data is available and present
             String contentType = "application/octet-stream";
             server.sendHeader("Content-Disposition", "attachment; filename=" + fileName);
             if (server.streamFile(datafile, contentType) != datafile.size()) {
-                Write_Console_Message("Sent less data than expected");
+                console_message = "Sent less data (" + String(server.streamFile(datafile, contentType)) + ")";
+                console_message += " from " + fileName + " than expected (";
+                console_message += String(datafile.size()) + ")";
+                Write_Console_Message();
             }
         }
     }
     datafile.close(); // close the file:
     webpage = "";
-    Write_Console_Message("End of Get_File");
 }
 void Delete_Files() {                                                           // allow the cliet to select a file for deletion
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    Write_Console_Message("Start of List Files");
-    webpage = ""; // don't delete this command, it ensures the server works reliably!
+    console_message = "Delete Files Requested via Webpage";
+    Write_Console_Message();
+    webpage = "";
     Page_Header(false, "Energy Monitor Delete Files");
-    for (i = 1; i < file_count; i++) {
-        if (FileNames[i] != RS485FileName) {                            // do not list the current file
-            webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-            webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
-            webpage += "</h3>";
+    if (file_count > 3) {
+        for (i = 1; i < file_count; i++) {
+            if (FileNames[i] != DataFileName && FileNames[i] != ConsoleFileName) {                            // do not list the current file
+                webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
+                webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
+                webpage += "</h3>";
+            }
         }
+    }
+    else {
+        webpage += F("<h3 ");
+        webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+        webpage += F(">No Deletable Files");
+        webpage += F("</span></strong></h3>");
     }
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Write_Console_Message("End of List Files");
 }
 void Del_File() {                                                       // web request to delete a file
-    Write_Console_Message("Delete File Requested");
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
-    if (fileName != ("/" + RS485FileName)) {                            // do not delete the current file
+    if (fileName != ("/" + DataFileName)) {                            // do not delete the current file
+        console_message = DataFileName + "Removed";
+        Write_Console_Message();
         SD.remove(fileName);
     }
     int file_count = Count_Files_on_SD_Drive();                         // this counts and creates an array of file names on SD
@@ -1130,11 +1060,11 @@ void Del_File() {                                                       // web r
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Write_Console_Message("End of Delete_File");
 }
 void Average_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    Write_Console_Message("Start of Average Files");
+    console_message = "Average Files Requested via Webpage";
+    Write_Console_Message();
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Plot Average Files");
     for (i = 1; i < file_count; i++) {
@@ -1145,83 +1075,69 @@ void Average_Files() {
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Write_Console_Message("End of List Files");
 }
 void Average_File() {
-    Write_Console_Message("Start of Analyse File");
     String log_time;
     log_time = "Time";
     char temp;
     int average_table_record_count = 0;
     int records = 0;
-    char csvField[10];
+    char dataField[10];
     int character_count = 0;
     int fieldNo = 1;
     double total_amperage = 0;
     double average_amperage = 0;
     char time[8];
-    int file_record_count = 0;
     int a_logging_count = 0;
     digitalWrite(SD_Active_led_pin, HIGH);
     //  1. find the number of records in the file ---------------------------------------------------------------------
     String fileName = "        ";
     fileName = server.arg("file");
     record_count = 0;                                                 // miss the first record in the file - column titles
-    File csvFile = SD.open("/" + fileName, FILE_READ);
-    if (csvFile) {                                                    // if file successfully opened 
-        console.print(millis(), DEC);
-        console.print("\t\tLoading data from ");
-        console.println(fileName);
-        while (csvFile.available()) {                                 // throw the first row, column headers, away
-            temp = csvFile.read();
+    File dataFile = SD.open("/" + fileName, FILE_READ);
+    if (dataFile) {                                                    // if file successfully opened 
+        console_message = "Averaging data from " + fileName;
+        Write_Console_Message();
+        while (dataFile.available()) {                                 // throw the first row, column headers, away
+            temp = dataFile.read();
             if (temp == '\n') break;
         }
-        console.print(millis(), DEC);
-        console.println("\t\tFirst Record Ignored");
-        while (csvFile.available()) {                                 // count the lines in the file
-            temp = csvFile.read();
+        while (dataFile.available()) {                                 // count the lines in the file
+            temp = dataFile.read();
             if (temp == '\n') {                                       // by counting the end of lines
                 record_count++;                                       // increment the count
             }
         }
     }
-    csvFile.close();
-    Write_Console_Message("Number of Records in File :" + String(record_count));
-    file_record_count = record_count;
+    dataFile.close();
     //  2. calculate the number of rows per average -------------------------------------------------------------------
-    if (record_count < table_size) {
-        Write_Console_Message("Insufficient Records");
-    }
     records = record_count / table_size;
     record_count = 0;
-    Write_Console_Message("Number of Records per batch: " + String(records));
     // 3. Read the specified number of records and calculate average amperage -----------------------------------------
-    csvFile = SD.open("/" + fileName, FILE_READ);               // open the file again
-    if (csvFile) {
-        Write_Console_Message("Opening File Again:");
+    dataFile = SD.open("/" + fileName, FILE_READ);               // open the file again
+    if (dataFile) {
         console.println(fileName);
-        while (csvFile.available()) {                           // throw the first row, column headers, away
-            temp = csvFile.read();
+        while (dataFile.available()) {                           // throw the first row, column headers, away
+            temp = dataFile.read();
             if (temp == '\n') break;
         }
-        Write_Console_Message("Loading datafile from: " + String(fileName));
-        while (csvFile.available()) {                           // do while there are data available
-            temp = csvFile.read();                              // read next character into temp
-            csvField[character_count++] = temp;                 // add it to the csvfield string
+        while (dataFile.available()) {                           // do while there are data available
+            temp = dataFile.read();                              // read next character into temp
+            dataField[character_count++] = temp;                 // add it to the csvfield string
             if (temp == ',' || temp == '\n') {                  // look for end of field
-                csvField[character_count - 1] = '\0';           // insert termination character where the ',' or '\n' was
+                dataField[character_count - 1] = '\0';           // insert termination character where the ',' or '\n' was
                 switch (fieldNo) {                              // process the field dependent on which fieldNo we are processing
                 case 1:                                         // field 1 is Date
                     break;
                 case 2:                                         // field 2 is Time
                     for (int x = 0; x < 8; x++) {
-                        time[x] = csvField[x];
+                        time[x] = dataField[x];
                     }
                     break;
                 case 3:                                         // field 3 ignore
                     break;
                 case 4:                                         // field 4 is Amperage 
-                    total_amperage += atof(csvField);           // accumulate to the total
+                    total_amperage += atof(dataField);           // accumulate to the total
                     break;
                 case 5:                                         // field 5 ignore
                 case 6:
@@ -1235,7 +1151,7 @@ void Average_File() {
                     break;
                 }
                 fieldNo++;                                      // increment the field number
-                csvField[0] = '\0';                             // clear the csvField
+                dataField[0] = '\0';                             // clear the dataField
                 character_count = 0;                            // zero the character cout
             }                                                   // finished processing this field
             if (temp == '\n') {
@@ -1254,7 +1170,7 @@ void Average_File() {
             }
         }   // end of while
     } // end of file.available()
-    csvFile.close();
+    dataFile.close();
     digitalWrite(SD_Active_led_pin, LOW);
     //4. Generate web page
     webpage = "";                           // don't delete this command, it ensures the server works reliably!
@@ -1311,54 +1227,28 @@ void Average_File() {
         }
         a_readings_table[x].amperage = 0;
     }
-    Write_Console_Message("End of Display Average");
-}
-void Debug_Toggle() {                                                  // display console message on web page
-#ifndef DEBUG
-    debug = false;
-    webpage = "";
-    Display();
-#endif
-    debug = !debug;
-    webpage = "";
-    Display();
 }
 void Debug_Show() {
-    int file_count = Count_Files_on_SD_Drive();
-    Write_Console_Message("Start of Console Message DIsplay");
-    Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);                      // open the SD file
-    if (!Consolefile) {                                                              // oops - file not available!
-        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
-        while (true) {
-            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-            delay(500);
-            Check_Reset_Switch();                                                   // Reset will restart the processor so no return
-        }
-    }
-    SD_freespace = (SD.totalBytes() - SD.usedBytes());
-    webpage = ""; // don't delete this command, it ensures the server works reliably!
-    Page_Header(false, "Console Messages");
-    File datafile = SD.open("/" + ConsoleFileName, FILE_READ);  // Now read data from FS
-    webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
-    for (int x = 0; x < console_record_count; x++) {
-        webpage += F(">");
+    console_message = "Web Display of Console Messages Requested via Webpage";
+    Write_Console_Message();
+    webpage = "";
+    Page_Header(true, "Console Messages");
+    for (int x = 0; x < console_table_size; x++) {
+        webpage += F("<p ");
+        webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+        webpage += F("'>");
         webpage += String(console_table[x].ldate);
         webpage += F(" ");
         webpage += String(console_table[x].ltime);
         webpage += F(".");
         webpage += String(console_table[x].milliseconds);
-        webpage += F(" ");
+        webpage += F(": ");
         webpage += String(console_table[x].message);
         webpage += "</span></strong></p>";
     }
-    datafile.close();
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    Debug_Show();
-    Write_Console_Message("End of Debug Show");
 }
 int Count_Files_on_SD_Drive() {
     int file_count = 0;
@@ -1373,7 +1263,8 @@ int Count_Files_on_SD_Drive() {
             File datafile = SD.open("/" + filename, FILE_READ);     // Now read data from FS
             if (datafile) {                                         // if there is a file
                 FileNames[file_count] = filename;
-                Write_Console_Message("File " + String(file_count) + " filename " + String(filename) + " FileNames "); console.println(FileNames[file_count]);
+                console_message = "File " + String(file_count) + " filename " + String(filename);
+                Write_Console_Message();
                 file_count++;                                       // increment the file count
             }
             datafile.close(); // close the file:
@@ -1387,18 +1278,22 @@ int Count_Files_on_SD_Drive() {
     return (file_count);
 }
 void Wipe_Files() {                            // selected by pressing combonation of buttons
+    console_message = "Start of Wipe Files Request by Switch";
+    Write_Console_Message();
     String filename;
     File root = SD.open("/");                                       //  Open the root directory
     while (true) {
         File entry = root.openNextFile();                           //  get the next file
         if (entry) {
             filename = entry.name();
-            Write_Console_Message("Removing " + filename);
+            console_message = "Removing " + filename;
+            Write_Console_Message();
             SD.remove(entry.name());                                //  delete the file
         }
         else {
             root.close();
-            Write_Console_Message("All files removed from root directory, rebooting");
+            console_message = "All files removed from root directory, rebooting";
+            Write_Console_Message();
             ESP.restart();
         }
     }
@@ -1424,7 +1319,8 @@ double Receive(int field) {
     do {
         while (!RS485_Port.available()) {                                       // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {                   // no data received within 500 ms so timeout
-                Write_Console_Message("No Reply from RS485 within 500 ms");
+                console_message = "No Reply from RS485 within 500 ms";
+                Write_Console_Message();
                 while (true) {                                                          // wait for reset to be pressed
                     digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                     digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -1549,18 +1445,21 @@ double Receive(int field) {
 void Check_Start_Switch() {
     Start.update();
     if (Start.fell()) {
-        Write_Console_Message("\t\tStart Button Pressed");
+        console_message = "Start Button Pressed";
+        Write_Console_Message();
         if (started) {
-            if (RS485file) {
-                RS485file.close();
-                RS485file.flush();
+            if (Datafile) {
+                Datafile.close();
+                Datafile.flush();
             }
             started = false;
-            Write_Console_Message("\t\tStandby Mode Started");
+            console_message = "Standby Mode Started";
+            Write_Console_Message();
         }
         else {
             started = true;
-            Write_Console_Message("\t\tRunning Mode Started");
+            console_message = "Run Mode Started";
+            Write_Console_Message();
         }
     }
 }
@@ -1569,7 +1468,8 @@ void Check_SD_Switch() {
     char SD_led_state = 0;
     SD_switch.update();                                                                // update wipe switch
     if (SD_switch.fell()) {
-        Write_Console_Message("SD Button Pressed");
+        console_message = "SD Button Pressed";
+        Write_Console_Message();
         Running_led_state = digitalRead(Running_led_pin);                           // save the current state of the leds
         SD_led_state = digitalRead(SD_Active_led_pin);
         if (!started) {                                                             // do not allow Wipe if logging started
@@ -1579,8 +1479,9 @@ void Check_SD_Switch() {
                 Boot.update();
                 if (Boot.fell()) booted = true;                                     // WIPE + Boot = wipe directory
                 Reset.update();                                                     // reset will cancel the Wipe
-                if (Reset.fell())
-                    Write_Console_Message("Reset Button Pressed"); {
+                if (Reset.fell()) {
+                    console_message = "Reset Button Pressed";
+                    Write_Console_Message();
                     ESP.restart();
                 }
                 delay(150);
@@ -1589,15 +1490,15 @@ void Check_SD_Switch() {
                 delay(150);
             } while (!started);
             if (booted) {
-                Write_Console_Message("Boot Button Pressed");
+                console_message = "Boot Button Ptressed";
+                Write_Console_Message();
                 digitalWrite(SD_Active_led_pin, HIGH);
+                console_message = "Wiping Files";
+                Write_Console_Message();
                 Wipe_Files();                                                       // delete all files on the SD, Rebooted when compete
             }
             digitalWrite(Running_led_pin, Running_led_state);                       // restore the previous state of the leds
             digitalWrite(SD_Active_led_pin, SD_led_state);
-        }
-        else {
-            Write_Console_Message("Wipe ONLY when not started");
         }
     }
 }
@@ -1613,34 +1514,38 @@ void Drive_Running_Led() {
 void Check_Reset_Switch() {
     Reset.update();
     if (Reset.fell()) {
-        Write_Console_Message("Reset Button Depressed");
+        console_message = "Reset Button Pressed";
+        Write_Console_Message();
         ESP.restart();
     }
 }
 void Check_Boot_Switch() {
     Boot.update();
     if (Boot.fell()) {
-        Write_Console_Message("Boot Button Depressed");
+        console_message = "Boot Button Pressed";
+        Write_Console_Message();
         booted = true;
     }
     if (Boot.rose()) {
-        Write_Console_Message("Boot Released");
+        console_message = "Boot Button Released";
+        Write_Console_Message();
         booted = false;
     }
     return;
 }
 String GetDate(bool format) {
-    int time_connection_attempts = 0;
+    int connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        Write_Console_Message("Failed to obtain time ");
+        console_message = "Attempting to Get Date " + String(connection_attempts);
+        Write_Console_Message();
         delay(500);
-        Write_Console_Message(".");
-        if (time_connection_attempts > 20) {
-            Write_Console_Message("Time Network Error, Restarting");
+        connection_attempts++;
+        if (connection_attempts > 20) {
+            console_message = "Time Network Error, Restarting";
+            Write_Console_Message();
             ESP.restart();
         }
     }
-    console.print("");
     This_Year = (String)(timeinfo.tm_year + 1900);
     This_Month = (String)(timeinfo.tm_mon + 1);
     if (This_Month.length() < 2) This_Month = "0" + This_Month;
@@ -1656,13 +1561,15 @@ String GetDate(bool format) {
     return date_str;
 }
 String GetTime(bool format) {
-    int time_connection_attempts = 0;
+    int connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        Write_Console_Message("Failed to obtain time");
+        console_message = "Attempting to Get Time " + String(connection_attempts);
+        Write_Console_Message();
         delay(500);
-        Write_Console_Message(".");
-        if (time_connection_attempts > 20) {
-            Write_Console_Message("Time Network Error, Restarting");
+        connection_attempts++;
+        if (connection_attempts > 20) {
+            console_message = "Time Network Error, Restarting";
+            Write_Console_Message();
             ESP.restart();
         }
     }
@@ -1686,9 +1593,9 @@ void printDouble(double val, byte precision) {
     // precision is a number from 0 to 6 indicating the desired decimial places
     // example: printDouble( 3.1415, 2); // prints 3.14 (two decimal places)
 
-    temp_message = String(val);  //prints the int part
+    console_message = String(val);  //prints the int part
     if (precision > 0) {
-        temp_message += ("."); // print the decimal point
+        console_message += ("."); // print the decimal point
         unsigned long frac;
         unsigned long mult = 1;
         byte padding = precision - 1;
@@ -1703,15 +1610,15 @@ void printDouble(double val, byte precision) {
         while (frac1 /= 10)
             padding--;
         while (padding--)
-            temp_message += "0";
-        temp_message += String(frac);
+            console_message += "0";
+        console_message += String(frac);
     }
-    Write_Console_Message(temp_message);
+    Write_Console_Message();
 }
 void SDprintDouble(double val, byte precision) {
-    RS485file.print(int(val));  //prints the int part
+    Datafile.print(int(val));  //prints the int part
     if (precision > 0) {
-        RS485file.print("."); // print the decimal point
+        Datafile.print("."); // print the decimal point
         unsigned long frac;
         unsigned long mult = 1;
         byte padding = precision - 1;
@@ -1726,7 +1633,7 @@ void SDprintDouble(double val, byte precision) {
         while (frac1 /= 10)
             padding--;
         while (padding--)
-            RS485file.print("0");
-        RS485file.print(frac, DEC);
+            Datafile.print("0");
+        Datafile.print(frac, DEC);
     }
 }
