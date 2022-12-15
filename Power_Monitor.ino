@@ -9,8 +9,9 @@ Change Record
 09/12/2022  9.1 Webpage Graphs now display 1 to 50Amps
 10/12/2022  9.2 Webpage Reset function added
 11/12/2022  9.3 SD saving and Webpage viewing of console messages added
+14/12/2022  9.4 Added weather information to data file
 */
-String version = "V9.3";                                // software version number, shown on webpage
+String version = "V9.4";                // software version number, shown on webpage
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -30,11 +31,15 @@ String version = "V9.3";                                // software version numb
 #include <Uri.h>
 #include <HTTP_Method.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 const char* ssid = "Woodleigh";
 const char* password = "2008198399";
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0;                             // offset for the date and time function
+const char city[] = { "Basingstoke\0" };
+const char region[] = { "uk\0" };
+const char  incomplete_weather_api_link[] = { "http://api.openweathermap.org/data/2.5/weather?q=#&APPID=17aa99452bfb4a4e52415151e751ebda\0" };
 constexpr long console_Baudrate = 115200;
 constexpr long RS485_Baudrate = 9600;                           // baud rate of RS485 Port
 // ESP32 Pin Definitions ----------------------------------------------------------------------------------------------
@@ -67,6 +72,7 @@ Bounce SD_switch = Bounce();
 Bounce Boot = Bounce();
 WebServer server(80);                   // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
+HTTPClient http;
 File Datafile;                         // Full data file, holds all readings from KWS-AC301L
 File Consolefile;
 // --------------------------------------------------------------------------------------------------------------------
@@ -107,7 +113,7 @@ byte RS485_Requests[9][8] = {
 char print_buffer[80];
 String DataFileName = "20220101";
 String ConsoleFileName = "20220101";
-String RS485_FieldNames[9] = {
+String RS485_FieldNames[15] = {
                         "Volts",                    // [0]
                         "Amps",                     // [1]
                         "Watts",                    // [2]
@@ -117,6 +123,12 @@ String RS485_FieldNames[9] = {
                         "Unknown",                  // [6]
                         "Hz",                       // [7]
                         "degC",                     // [8]
+                        "Temperature",              // [9]
+                        "Pressure",                 // [10]
+                        "Humidity",                 // [11]
+                        "Wind Direction",           // [12]
+                        "Wind Speed",               // [13]
+                        "Weather"                   // [14]
 };
 String FileNames[50];
 String Data_Date;
@@ -140,6 +152,7 @@ int const table_size = 72;
 constexpr int console_table_size = 20;                  // number of lines to display on debug web page
 int       record_count, current_data_record_count, console_record_count, current_console_record_count;
 String    webpage, lastcall;
+double temperature_calibration = (double)16.5 / (double)22.0;   // temperature reading = 22, actual temperature = 16.5
 String Last_Boot_Date = "11/11/2022 12:12:12";
 typedef struct {
     char ldate[11];     // date record was taken
@@ -156,6 +169,19 @@ typedef struct {
 } record_type;
 record_type readings_table[table_size + 1];
 record_type a_readings_table[table_size + 1];
+// Lowest Voltage -----------------------------------------------------------------------------------------------------
+double lowest_voltage = 0;
+String date_of_lowest_voltage = "2022/01/01";
+String time_of_lowest_voltage = "00:00:00";
+// Highest Voltage ----------------------------------------------------------------------------------------------------
+double highest_voltage = 0;
+String date_of_highest_voltage = "2022/01/01";
+String time_of_highest_voltage = "00:00:00";
+// Highest amperage -----------------------------------------------------------------------------------------------------
+double highest_amperage = 0;
+String date_of_highest_amperage = "2022/01/01";
+String time_of_highest_amperage = "00:00:00";
+// Highest fre
 typedef struct {
     char ldate[11];         // date the message was taken
     char ltime[9];          // the time the message was taken
@@ -163,17 +189,56 @@ typedef struct {
     char message[120];
 } console_record_type;
 console_record_type console_table[console_table_size + 1];
+typedef struct {
+    double temp;
+    double temp_min;
+    double temp_max;
+    double temp_feel;
+    int pressure;
+    int humidity;
+    double wind_speed;
+    int wind_direction;
+    String weather;
+} weather_record_type;
+weather_record_type weather_record;
+double lowest_temperature = 0;
+String date_of_lowest_temperature = "2022/01/01";
+String time_of_lowest_temperature = "00:00:00";
+double highest_temperature = 0;
+String date_of_highest_temperature = "2022/01/01";
+String time_of_highest_temperature = "00:00:00";
+double latest_temperature = 0;
+String date_of_latest_temperature = "2022/01/01";
+String time_of_latest_temperature = "00:00:00";
+int latest_pressure = 0;
+String date_of_latest_pressure = "2022/01/01";
+String time_of_latest_pressure = "00:00:00";
+int latest_humidity = 0;
+String date_of_latest_humidity = "2022/01/01";
+String time_of_latest_humidity = "00:00:00";
+String latest_weather = "                                     ";
+String date_of_latest_weather = "2022/01/01";
+String time_of_latest_weather = "00:00:00";
 double largest_amperage = 0;
 String date_of_largest_amperage = "2022/01/01";
 String time_of_largest_amperage = "00:00:00";
-unsigned long last_sensor_read = 0;
+double latest_wind_speed = 0;
+String date_of_latest_wind_speed = "2022/01/01";
+String time_of_latest_wind_speed = "00:00:00";
+int latest_wind_direction = 0;
+String date_of_latest_wind_direction = "2022/01/01";
+String time_of_latest_wind_direction = "00:00:00";
+unsigned long last_cycle = 0;
+unsigned long last_weather_read = 0;
 uint64_t SD_freespace = 0;
 uint64_t critical_SD_freespace = 0;
 double SD_freespace_double = 0;
 String temp_message;
 String console_message = "                                                                    ";
 bool Post_Setup_Status = false;
+char complete_weather_api_link[120];
 int i = 0;
+char Parse_Output[25];
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
@@ -284,6 +349,23 @@ void setup() {
     Write_Console_Message();
     console_message = "Press Start Button to commence readings";
     Write_Console_Message();
+    int count = 0;
+    for (int x = 0; x <= 120; x++) {
+        if (incomplete_weather_api_link[x] == '\0') break;
+        if (incomplete_weather_api_link[x] != '#') {
+            complete_weather_api_link[count] = incomplete_weather_api_link[x];
+            count++;
+        }
+        else {
+            for (int y = 0; y < strlen(city); y++) {
+                complete_weather_api_link[count++] = city[y];
+            }
+            complete_weather_api_link[count++] = ',';
+            for (int y = 0; y < strlen(region); y++) {
+                complete_weather_api_link[count++] = region[y];
+            }
+        }
+    }
     digitalWrite(SD_Active_led_pin, LOW);
     Post_Setup_Status = true;
 }   // end of Setup
@@ -294,12 +376,43 @@ void loop() {
     Drive_Running_Led();                                            // on when started, flashing when not, flashing with SD led if waiting for reset
     server.handleClient();                                          // handle any messages from the website
     if (started) {                                                  // user has started the readings
-        if (millis() > last_sensor_read + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
-            last_sensor_read = millis();                            // update the last read milli second reading  
+        // Energy Information - every 5 seconds -------------------------------------------------------------------------------
+        if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
+            last_cycle = millis();                            // update the last read milli second reading
+            // weather start ------------------------------------------------------------------------------------------
+            HTTPClient http;
+            http.begin(complete_weather_api_link);                           // start the weather connectio
+            int httpCode = http.GET();                              // send the request
+            if (httpCode > 0) {
+                if (httpCode == HTTP_CODE_OK) {
+                    console.println("http code ok");
+                    String payload = http.getString();
+                    console.println("Parsing Weather");
+                    Parse_Weather_Info(payload);
+                    console.println("parsing complete");
+                }
+                else {
+                    console_message = "Obtaining Weather Information Failed, Return code: " + String(httpCode);
+                    Write_Console_Message();
+                    weather_record.temp = 0;
+                    weather_record.temp_min = 0;
+                    weather_record.temp_max = 0;
+                    weather_record.temp_feel = 0;
+                    weather_record.pressure = 0;
+                    weather_record.humidity = 0;
+                    weather_record.wind_direction = 0;
+                    weather_record.wind_speed = 0;
+                    weather_record.weather = "";
+                }
+                http.end();
+            }
+            // weather end --------------------------------------------------------------------------------------------
+            // sensor start -------------------------------------------------------------------------------------------
             for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
                 Send_Request(i);                                    // send the RS485 Port the requests, one by one
                 Data_Values[i] = Receive(i);                        // get the reply
             }                                                       // all values should now be populated
+            // sensor end ---------------------------------------------------------------------------------------------
             Data_Date = GetDate(true);                              // get the date of the reading
             Data_Time = GetTime(true);                              // get the time of the reading
             if (This_Date != GetDate(false)) {                      // has date changed
@@ -325,21 +438,47 @@ void Write_New_Data_Record_to_Data_File() {
         }
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
-    Datafile.print(Data_Date); Datafile.print(",");          // dd/mm/yyyy,
-    Datafile.print(Data_Time); Datafile.print(",");          // dd/mm/yyyy,hh:mm:ss,
-    SDprintDouble(Data_Values[0], 1); Datafile.print(",");    // voltage
-    SDprintDouble(Data_Values[1], 3); Datafile.print(",");    // amperage
-    SDprintDouble(Data_Values[2], 2); Datafile.print(",");    // wattage
-    SDprintDouble(Data_Values[3], 1); Datafile.print(",");    // up time
-    SDprintDouble(Data_Values[4], 3); Datafile.print(",");    // kilowatt hour
-    SDprintDouble(Data_Values[5], 2); Datafile.print(",");    // power factor
-    SDprintDouble(Data_Values[6], 1); Datafile.print(",");    // unknown
-    SDprintDouble(Data_Values[7], 1); Datafile.print(",");    // frequency
-    SDprintDouble(Data_Values[8], 1);                          // temperature
+    Datafile.print(Data_Date); Datafile.print(",");             // 1. dd/mm/yyyy,
+    Datafile.print(Data_Time); Datafile.print(",");             // 2. dd/mm/yyyy,hh:mm:ss,
+    SDprintDouble(Data_Values[0], 1); Datafile.print(",");      // 3. voltage
+    SDprintDouble(Data_Values[1], 3); Datafile.print(",");      // 4. amperage
+    SDprintDouble(Data_Values[2], 2); Datafile.print(",");      // 5. wattage
+    SDprintDouble(Data_Values[3], 1); Datafile.print(",");      // 6. up time
+    SDprintDouble(Data_Values[4], 3); Datafile.print(",");      // 7. kilowatt hour
+    SDprintDouble(Data_Values[5], 2); Datafile.print(",");      // 8. power factor
+    ***********
+        SDprintDouble(Data_Values[6], 1); Datafile.print(",");      // unknown
+    SDprintDouble(Data_Values[7], 1); Datafile.print(",");      // frequency
+    SDprintDouble(Data_Values[8], 1); Datafile.print(",");      // temperature
+    // weather values
+    SDprintDouble(weather_record.temp, 2); Datafile.print(",");             // weather temperature
+    SDprintDouble(weather_record.pressure, 0); Datafile.print(",");          // weather pressure
+    SDprintDouble(weather_record.humidity, 0); Datafile.print(",");          // weather humidity
+    SDprintDouble(weather_record.wind_direction, 0); Datafile.print(",");    // weather wind direction
+    SDprintDouble(weather_record.wind_speed, 0); Datafile.print(",");       // weather wind speed
+    Datafile.print(weather_record.weather);                                 // weather decription
     Datafile.print("\n");                                      // end of record
     Datafile.close();                                          // close the sd file
     Datafile.flush();                                          // make sure it has been written to SD
     digitalWrite(SD_Active_led_pin, LOW);
+    //    if (Data_Values[0] >= highest_voltage) {
+    //        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
+    //            date_of_highest_voltage[i] = Data_Date[i];
+    //        }
+    //        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+    //            time_of_highest_voltage[i] = Data_Time[i];
+    //        }
+    //        highest_voltage = Data_Values[1];                     // update the largest current value
+    //    }
+    //    if (Data_Values[0] <= lowest_voltage) {
+    //        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
+    //            date_of_lowest_voltage[i] = Data_Date[i];
+    //        }
+    //        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+    //            time_of_lowest_voltage[i] = Data_Time[i];
+    //        }
+    //        lowest_voltage = Data_Values[1];                     // update the largest current value
+    //    }
     if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
         for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
             date_of_largest_amperage[i] = Data_Date[i];
@@ -349,6 +488,47 @@ void Write_New_Data_Record_to_Data_File() {
         }
         largest_amperage = Data_Values[1];                     // update the largest current value
     }
+    /*
+        if (weather_record.temp >= highest_temperature) {       // update the highest weather temperature
+            for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
+                date_of_highest_temperature[i] = Data_Date[i];
+            }
+            for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+                time_of_highest_temperature[i] = Data_Time[i];
+            }
+            highest_temperature = weather_record.temp;          // update the highest weather temperature
+        }
+        if (weather_record.temp <= lowest_temperature) {        // update the lowest weather temperature
+            for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
+                date_of_lowest_temperature[i] = Data_Date[i];
+            }
+            for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+                time_of_lowest_temperature[i] = Data_Time[i];
+            }
+            lowest_temperature = weather_record.temp;           // update the lowest weather temperature
+        }
+        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
+            date_of_latest_pressure[i] = Data_Date[i];
+        }
+        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+            time_of_latest_pressure[i] = Data_Time[i];
+        }
+        latest_pressure = weather_record.pressure;
+        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
+            date_of_latest_humidity[i] = Data_Date[i];
+        }
+        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+            time_of_latest_humidity[i] = Data_Time[i];
+        }
+        latest_humidity = weather_record.humidity;
+        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
+            date_of_latest_weather[i] = Data_Date[i];
+        }
+        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+            time_of_latest_weather[i] = Data_Time[i];
+        }
+        latest_weather = weather_record.weather;
+     */
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
         console_message = "\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
@@ -454,11 +634,11 @@ void Create_New_Data_File() {
         }
         Datafile.print("Date,");                                    // write first column header
         Datafile.print("Time,");                                    // write second column header
-        for (int x = 0; x < 8; x++) {                               // write data column headings into the SD file
+        for (int x = 0; x < 14; x++) {                               // write data column headings into the SD file
             Datafile.print(RS485_FieldNames[x]);
             Datafile.print(",");
         }
-        Datafile.println(RS485_FieldNames[8]);
+        Datafile.println(RS485_FieldNames[15]);
         Datafile.close();
         Datafile.flush();
         current_data_record_count = 0;
@@ -558,11 +738,12 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned
 int StartWiFi(const char* ssid, const char* password) {
     console_message = "WiFi Connecting to " + String(ssid);
     Write_Console_Message();
-    WiFi.begin(ssid, password);
-    console_message = "WiFi Status: " + String(WiFi.status());
+    WiFi.disconnect(true);                                      // disconnect to set new wifi connection
+    WiFi.begin(ssid, password);                                 // connect to the wifi network
+    console_message = "WiFi Status: " + String(WiFi.status());  // display current status of WiFi
     Write_Console_Message();
-    int wifi_connection_attempts = 0;
-    while (WiFi.status() != WL_CONNECTED) {
+    int wifi_connection_attempts = 0;                           // zero the attempt counter
+    while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
         delay(500);
         console_message = "Connection attempt " + String(wifi_connection_attempts);
         Write_Console_Message();
@@ -638,6 +819,25 @@ void Prefill_Array() {
                     break;
                 case 11:
                     readings_table[record_count].temperature = atof(dataField);  // Temperature
+                    break;
+                case 12:
+                    // weather temperature
+                    break;
+                case 13:
+                    // weather pressure
+                    break;
+                case 14:
+                    // weather humidity
+                    break;
+                case 15:
+                    // weather wind direction
+                    break;
+                case 16:
+                    // weather wind speed
+                    break;
+                case 17:
+                    // weather description
+                    break;
                 }
                 datafieldNo++;
                 dataField[0] = '\0';
@@ -926,21 +1126,21 @@ void Statistics() {                                                 // Display f
     Page_Header(false, "Energy Monitor Statistics");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F(">Current Data Log file size = ");
     webpage += String(datafile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
     File consolefile = SD.open("/" + ConsoleFileName, FILE_READ);  // Now read data from FS
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F(">Current Console Log file size = ");
     webpage += String(consolefile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
     if (SD_freespace < critical_SD_freespace) {
         webpage += F("<p ");
-        webpage += F("style='text-align:left;'><strong><span style='color:red;bold:true;font-size:24px'");
+        webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
         webpage += F("'>SD Free Space = ");
         webpage += String(SD_freespace / 1000000);
         webpage += F(" MB");
@@ -948,31 +1148,125 @@ void Statistics() {                                                 // Display f
     }
     else {
         webpage += F("<p ");
-        webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px'");
+        webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
         webpage += F("'>SD Free Space = ");
         webpage += String(SD_freespace / 1000000);
         webpage += F(" MB");
         webpage += "</span></strong></p>";
     }
+    // Last Boot Time -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Last Boot Time and Date: ");
     webpage += Last_Boot_Date;
     webpage += "</span></strong></p>";
+    // ----------------------------------------------------------------------------------------------------------------
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Number of readings = ");
     webpage += String(current_data_record_count);
     webpage += "</span></strong></p>";
+    // Highest Voltage ------------------------------------------------------------------------------------------------
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Highest Voltage on ");
+    webpage += String(date_of_highest_voltage) + " at ";
+    webpage += String(time_of_highest_voltage) + " = ";
+    webpage += String(highest_voltage) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Lowest Voltage -------------------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Lowest Voltage on ");
+    webpage += String(date_of_lowest_voltage) + " at ";
+    webpage += String(time_of_lowest_voltage) + " = ";
+    webpage += String(lowest_voltage) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Greatest Amperage ----------------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Greatest Amperage on ");
     webpage += String(date_of_largest_amperage) + " at ";
     webpage += String(time_of_largest_amperage) + " = ";
     webpage += String(largest_amperage) + "ma";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;font-size:24px'");
+    // Weather Latest Temperature -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Latest Temperature: ");
+    webpage += String(date_of_latest_temperature) + " at ";
+    webpage += String(time_of_latest_temperature) + " = ";
+    webpage += String(latest_temperature) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Lowest Temperature -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Lowest Temperature: ");
+    webpage += String(date_of_lowest_temperature) + " at ";
+    webpage += String(time_of_lowest_temperature) + " = ";
+    webpage += String(lowest_temperature) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Highest Temperature -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Highest Temperature: ");
+    webpage += String(date_of_highest_temperature) + " at ";
+    webpage += String(time_of_highest_temperature) + " = ";
+    webpage += String(highest_temperature) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Humidity -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Latest Humidity: ");
+    webpage += String(date_of_latest_humidity) + " at ";
+    webpage += String(time_of_latest_humidity) + " = ";
+    webpage += String(latest_humidity) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Pressure -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Latest Pressure: ");
+    webpage += String(date_of_latest_pressure) + " at ";
+    webpage += String(time_of_latest_pressure) + " = ";
+    webpage += String(latest_pressure) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Description: ");
+    webpage += String(date_of_latest_weather) + " at ";
+    webpage += String(time_of_latest_weather) + " = ";
+    webpage += String(latest_weather) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Wind Speed -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Latest Wind Speed: ");
+    webpage += String(date_of_latest_wind_speed) + " at ";
+    webpage += String(time_of_latest_wind_speed) + " = ";
+    webpage += String(latest_wind_speed) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // Weather Direction -------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather Latest Wind Direction: ");
+    webpage += String(date_of_latest_wind_direction) + " at ";
+    webpage += String(time_of_latest_wind_direction) + " = ";
+    webpage += String(latest_wind_direction) + "ma";
+    webpage += "</span></strong></p>";
+    webpage += F("<p ");
+    // File Count -----------------------------------------------------------------------------------------------------
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'> Number of Files on SD : ");
     webpage += String(file_count - 1);
     webpage += "</span></strong></p>";
@@ -1490,7 +1784,7 @@ void Check_SD_Switch() {
                 delay(150);
             } while (!started);
             if (booted) {
-                console_message = "Boot Button Ptressed";
+                console_message = "Boot Button Pressed";
                 Write_Console_Message();
                 digitalWrite(SD_Active_led_pin, HIGH);
                 console_message = "Wiping Files";
@@ -1636,4 +1930,91 @@ void SDprintDouble(double val, byte precision) {
             Datafile.print("0");
         Datafile.print(frac, DEC);
     }
+}
+/*
+Weather Payload :
+{
+    "coord":{"lon":-1.0871, "lat" : 51.2625},
+        "weather" : [{"id":701, "main" : "Mist", "description" : "mist", "icon" : "50n"}] ,
+        "base" : "stations",
+        "main" : {
+                    "temp":272.77,
+                    "feels_like":269.61,
+                    "temp_min":271.64,
+                    "temp_max":274.14,
+                    "pressure":1007,
+                    "humidity":95
+                 },
+        "visibility" : 7000,
+        "wind" : {
+                    "speed":2.57,
+                    "deg":20
+                 },
+        "clouds" : {"all":100},
+        "dt" : 1671039606,
+        "sys" : {"type":2, "id" : 2016598, "country" : "GB", "sunrise" : 1671004889, "sunset" : 1671033394},
+        "timezone" : 0, "id" : 2656192, "name" : "Basingstoke", "cod" : 200
+}
+
+Post Processing:
+    float temp = (float)(root["main"]["temp"]) - 273.15;    // get temperature
+    float pressure = (float)(root["main"]["pressure"]) / 1000;   // get pressure
+    Humidity is in %.
+    Wind speed in m / s(meters per second)
+    Wind degree in degrees(°).
+*/
+void Parse_Weather_Info(String payload) {
+    //   console.println(payload);
+       // Temperature ----------------------------------------------------------------------------------------------------
+    int temp_start = payload.indexOf("temp\":");                        // "temp":272.77,
+    temp_start = payload.indexOf(":", temp_start);
+    int temp_end = payload.indexOf(",", temp_start);
+    parse(payload, temp_start, temp_end);
+    weather_record.temp = (double)(atof(Parse_Output)) - (double)273.15;
+    // Pressure -------------------------------------------------------------------------------------------------------
+    int pressure_start = payload.indexOf("pressure\":");                // "pressure":1007,
+    pressure_start = payload.indexOf(":", pressure_start);
+    int pressure_end = payload.indexOf(",", pressure_start);
+    parse(payload, pressure_start, pressure_end);
+    weather_record.pressure = (int)atof(Parse_Output) / (int)100;
+    // humidity -------------------------------------------------------------------------------------------------------
+    int humidity_start = payload.indexOf("humidity\":");                // "humidity":95}
+    humidity_start = payload.indexOf(":", humidity_start);
+    int humidity_end = payload.indexOf("}", humidity_start);
+    parse(payload, humidity_start, humidity_end);
+    weather_record.humidity = (int)atof(Parse_Output) / (int)10000;
+    // weather --------------------------------------------------------------------------------------------------------
+    int weather_start = payload.indexOf("description");            // "weather" : [{"id":701, "main" : "Mist", "description":"mist", "icon" : "50n"}] ,
+    weather_start = payload.indexOf(":", weather_start);            // "description":"clear sky","icon"
+    weather_start = weather_start + 2;
+    int weather_end = payload.indexOf("\"", weather_start);
+    parse(payload, weather_start - 1, weather_end);
+    weather_record.weather = String(Parse_Output);
+    // wind speed -----------------------------------------------------------------------------------------------------
+    int wins_start = payload.indexOf("speed\":");                       // "speed":2.57,
+    wins_start = payload.indexOf(":", wins_start);
+    int wins_end = payload.indexOf(",", wins_start);
+    parse(payload, wins_start, wins_end);
+    weather_record.wind_speed = (double)(atof(Parse_Output));
+    // wind direction -------------------------------------------------------------------------------------------------
+    int wind_start = payload.indexOf("deg\":");                         // "deg":20
+    wind_start = payload.indexOf(":", wind_start);
+    int wind_end = payload.indexOf("}", wind_start);
+    parse(payload, wind_start, wind_end);
+    weather_record.wind_direction = (int)atof(Parse_Output) / (int)10;
+
+    //   console.print("Weather Temperature: "); console.println(weather_record.temp, DEC);
+    //   console.print("Weather Pressure: "); console.println(weather_record.pressure, DEC);
+    //   console.print("Weather Humidity: "); console.println(weather_record.humidity, DEC);
+    //   console.print("Weather Wind Direction: "); console.println(weather_record.wind_direction, DEC);
+    //   console.print("Weather Wind Speed: "); console.println(weather_record.wind_speed, DEC);
+    //   console.print("Weather Description: "); console.println(weather_record.weather);
+    //   while (1);
+}
+void parse(String payload, int start, int end) {
+    int ptr = 0;
+    for (int pos = start + 1; pos < end; pos++) {
+        Parse_Output[ptr++] = payload[pos];
+    }
+    Parse_Output[end] = '\0';
 }

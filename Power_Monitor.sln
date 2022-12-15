@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Power_Monitor", "Power_Moni
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FS-2.0.0", "Libraries\FS\2.0.0\FS\FS-2.0.0.vcxitems", "{EB22BD68-67DB-4A5C-8DEE-3D7B2D00C9AB}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HTTPClient-2.0.0", "Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems", "{A050FABA-F8F8-4D2D-916D-31C32D07AF94}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x86 = Debug|x86
@@ -25,7 +27,9 @@ Global
 		SolutionGuid = {79746370-D6F8-420E-861C-2D97DE0C3047}
 	EndGlobalSection
 	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems*{a050faba-f8f8-4d2d-916d-31c32d07af94}*SharedItemsImports = 9
 		Libraries\FS\2.0.0\FS\FS-2.0.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 		Libraries\FS\2.0.0\FS\FS-2.0.0.vcxitems*{eb22bd68-67db-4a5c-8dee-3d7b2d00c9ab}*SharedItemsImports = 9
 	EndGlobalSection
 EndGlobal
