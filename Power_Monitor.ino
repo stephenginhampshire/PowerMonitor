@@ -182,7 +182,7 @@ String time_of_highest_voltage = "00:00:00";
 // Highest amperage -----------------------------------------------------------------------------------------------------
 double highest_amperage = 0;
 String time_of_highest_amperage = "00:00:00";
-// Highest fre
+// Highest frequency --------------------------------------------------------------------------------------------------
 typedef struct {
     char ldate[11];         // date the message was taken
     char ltime[9];          // the time the message was taken
@@ -231,12 +231,15 @@ bool Post_Setup_Status = false;
 char complete_weather_api_link[120];
 int i = 0;
 char Parse_Output[25];
+String pre_loop_messages[100];
+unsigned long pre_loop_millis_values[100];
+int pre_loop_message_count = 0;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
     while (!console);                                                                    // wait for port to settle
     delay(4000);
-    console_message = "Commencing Setup";
+    console_message = "Booting - Commencing Setup";
     Write_Console_Message();
     pinMode(SD_Active_led_pin, OUTPUT);
     pinMode(Start_switch_pin, INPUT_PULLUP);
@@ -637,15 +640,31 @@ void Create_New_Data_File() {
     }
 }
 void Write_Console_Message() {
+    String saved_console_message = console_message;
     String Date;
     String Time;
     unsigned long milliseconds = millis();
-    if (Post_Setup_Status) {                                        // only write the console message to disk once setup is complete
+    if (Post_Setup_Status) {                                                // only write the console message to disk once setup is complete
+        if (pre_loop_message_count > 0) {
+            for (int x = 0; x < pre_loop_message_count; x++) {
+                console_message = pre_loop_messages[pre_loop_message_count];
+                Write_New_Console_Message_to_Console_File(Date, Time, pre_loop_millis_values[x]);
+                Add_New_Console_Message_to_Console_Table(Date, Time, pre_loop_millis_values[x]);
+            }
+            pre_loop_message_count = 0;
+        }
+        console_message = saved_console_message;                            // restore the console_message
         Date = GetDate(true);
         Time = GetTime(true);
         Write_New_Console_Message_to_Console_File(Date, Time, milliseconds);
         Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds);
     }
+    else {
+        pre_loop_millis_values[pre_loop_message_count] = millis();
+        pre_loop_messages[pre_loop_message_count] = console_message;
+        pre_loop_message_count++;
+    }
+    console_message = saved_console_message;
     console.print(millis(), DEC); console.print("\t"); console.println(console_message);
 }
 void Write_New_Console_Message_to_Console_File(String date, String time, unsigned long milliseconds) {
@@ -1287,8 +1306,8 @@ void Statistics() {                                                 // Display f
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console_message = "Download of Files Requested via Webpage";
-    Write_Console_Message();
+    //    console_message = "Download of Files Requested via Webpage";
+    //    Write_Console_Message();
     webpage = "";
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
@@ -1341,7 +1360,7 @@ void Delete_Files() {                                                           
 #endif
         }
 #ifndef ALLOW_WORKING_FILE_DELETION
-    }
+}
     else {
         webpage += F("<h3 ");
         webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
@@ -1352,7 +1371,7 @@ void Delete_Files() {                                                           
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-}
+    }
 void Del_File() {                                                       // web request to delete a file
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
@@ -1378,15 +1397,17 @@ void Del_File() {                                                       // web r
     webpage = "";
 }
 void Average_Files() {
-    int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console_message = "Average Files Requested via Webpage";
-    Write_Console_Message();
-    webpage = ""; // don't delete this command, it ensures the server works reliably!
-    Page_Header(false, "Energy Monitor Plot Average Files");
+    int file_extension = 0;
+    int file_count = Count_Files_on_SD_Drive();     // this counts and creates an array of file names on SD
+    webpage = "";
+    Page_Header(false, "Energy Monitor Plot Files");
     for (i = 1; i < file_count; i++) {
-        webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-        webpage += "&nbsp;<a href=\"/AverageFile?file=" + String(FileNames[i]) + " " + "\">Analyse</a>";
-        webpage += "</h3>";
+        file_extension = FileNames[i].indexOf("cvs");
+        if (file_extension > 0) {
+            webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
+            webpage += "&nbsp;<a href=\"/AverageFile?file=" + String(FileNames[i]) + " " + "\">Analyse</a>";
+            webpage += "</h3>";
+        }
     }
     Page_Footer();
     server.send(200, "text/html", webpage);
@@ -1409,11 +1430,13 @@ void Average_File() {
     //  1. find the number of records in the file ---------------------------------------------------------------------
     String fileName = "        ";
     fileName = server.arg("file");
+    console_message = "Plot of " + fileName + " Requested via Webpage";
+    Write_Console_Message();
     record_count = 0;                                                 // miss the first record in the file - column titles
     File dataFile = SD.open("/" + fileName, FILE_READ);
     if (dataFile) {                                                    // if file successfully opened 
-        console_message = "Averaging data from " + fileName;
-        Write_Console_Message();
+        //       console_message = "Averaging data from " + fileName;
+        //       Write_Console_Message();
         while (dataFile.available()) {                                 // throw the first row, column headers, away
             temp = dataFile.read();
             if (temp == '\n') break;
@@ -1432,7 +1455,7 @@ void Average_File() {
     // 3. Read the specified number of records and calculate average amperage -----------------------------------------
     dataFile = SD.open("/" + fileName, FILE_READ);               // open the file again
     if (dataFile) {
-        console.println(fileName);
+        //        console.println(fileName);
         while (dataFile.available()) {                           // throw the first row, column headers, away
             temp = dataFile.read();
             if (temp == '\n') break;
@@ -1490,7 +1513,7 @@ void Average_File() {
     digitalWrite(SD_Active_led_pin, LOW);
     //4. Generate web page
     webpage = "";                           // don't delete this command, it ensures the server works reliably!
-    Page_Header(false, "Energy Analysis of " + fileName);
+    Page_Header(false, "Energy Plot of " + fileName);
     // <script> -------------------------------------------------------------------------------------------------------
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
     webpage += F("<script type=\"text/javascript\">");
