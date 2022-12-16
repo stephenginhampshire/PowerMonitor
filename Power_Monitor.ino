@@ -10,8 +10,12 @@ Change Record
 10/12/2022  9.2 Webpage Reset function added
 11/12/2022  9.3 SD saving and Webpage viewing of console messages added
 14/12/2022  9.4 Added weather information to data file
+16/12/2022  9.5 Add more statistics to statistics page
 */
-String version = "V9.4";                // software version number, shown on webpage
+String version = "V9.5";                // software version number, shown on webpage
+// compiler directives ------------------------------------------------------------------------------------------------
+#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
+//#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -39,7 +43,7 @@ const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0;                             // offset for the date and time function
 const char city[] = { "Basingstoke\0" };
 const char region[] = { "uk\0" };
-const char  incomplete_weather_api_link[] = { "http://api.openweathermap.org/data/2.5/weather?q=#&APPID=17aa99452bfb4a4e52415151e751ebda\0" };
+const char  incomplete_weather_api_link[] = { "http://api.openweathermap.org/data/2.5/weather?q=#&APPID=917ddeff21dff2cfc5e57717f809d6ad\0" };
 constexpr long console_Baudrate = 115200;
 constexpr long RS485_Baudrate = 9600;                           // baud rate of RS485 Port
 // ESP32 Pin Definitions ----------------------------------------------------------------------------------------------
@@ -153,7 +157,7 @@ constexpr int console_table_size = 20;                  // number of lines to di
 int       record_count, current_data_record_count, console_record_count, current_console_record_count;
 String    webpage, lastcall;
 double temperature_calibration = (double)16.5 / (double)22.0;   // temperature reading = 22, actual temperature = 16.5
-String Last_Boot_Date = "11/11/2022 12:12:12";
+String Last_Boot_Time = "12:12:12";
 typedef struct {
     char ldate[11];     // date record was taken
     char ltime[9];      // time record was taken
@@ -171,15 +175,12 @@ record_type readings_table[table_size + 1];
 record_type a_readings_table[table_size + 1];
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double lowest_voltage = 0;
-String date_of_lowest_voltage = "2022/01/01";
 String time_of_lowest_voltage = "00:00:00";
 // Highest Voltage ----------------------------------------------------------------------------------------------------
 double highest_voltage = 0;
-String date_of_highest_voltage = "2022/01/01";
 String time_of_highest_voltage = "00:00:00";
 // Highest amperage -----------------------------------------------------------------------------------------------------
 double highest_amperage = 0;
-String date_of_highest_amperage = "2022/01/01";
 String time_of_highest_amperage = "00:00:00";
 // Highest fre
 typedef struct {
@@ -202,31 +203,22 @@ typedef struct {
 } weather_record_type;
 weather_record_type weather_record;
 double lowest_temperature = 0;
-String date_of_lowest_temperature = "2022/01/01";
 String time_of_lowest_temperature = "00:00:00";
 double highest_temperature = 0;
-String date_of_highest_temperature = "2022/01/01";
 String time_of_highest_temperature = "00:00:00";
 double latest_temperature = 0;
-String date_of_latest_temperature = "2022/01/01";
 String time_of_latest_temperature = "00:00:00";
 int latest_pressure = 0;
-String date_of_latest_pressure = "2022/01/01";
 String time_of_latest_pressure = "00:00:00";
 int latest_humidity = 0;
-String date_of_latest_humidity = "2022/01/01";
 String time_of_latest_humidity = "00:00:00";
 String latest_weather = "                                     ";
-String date_of_latest_weather = "2022/01/01";
 String time_of_latest_weather = "00:00:00";
 double largest_amperage = 0;
-String date_of_largest_amperage = "2022/01/01";
 String time_of_largest_amperage = "00:00:00";
 double latest_wind_speed = 0;
-String date_of_latest_wind_speed = "2022/01/01";
 String time_of_latest_wind_speed = "00:00:00";
 int latest_wind_direction = 0;
-String date_of_latest_wind_direction = "2022/01/01";
 String time_of_latest_wind_direction = "00:00:00";
 unsigned long last_cycle = 0;
 unsigned long last_weather_read = 0;
@@ -339,7 +331,7 @@ void setup() {
         console_message = "Create Console Logging File";
         Write_Console_Message();
     }
-    Last_Boot_Date = GetDate(true) + " " + GetTime(true);
+    Last_Boot_Time = GetTime(true);
     This_Date = GetDate(false);
     Create_New_Data_File();
     Create_New_Console_File();
@@ -385,11 +377,8 @@ void loop() {
             int httpCode = http.GET();                              // send the request
             if (httpCode > 0) {
                 if (httpCode == HTTP_CODE_OK) {
-                    console.println("http code ok");
                     String payload = http.getString();
-                    console.println("Parsing Weather");
                     Parse_Weather_Info(payload);
-                    console.println("parsing complete");
                 }
                 else {
                     console_message = "Obtaining Weather Information Failed, Return code: " + String(httpCode);
@@ -446,89 +435,84 @@ void Write_New_Data_Record_to_Data_File() {
     SDprintDouble(Data_Values[3], 1); Datafile.print(",");      // 6. up time
     SDprintDouble(Data_Values[4], 3); Datafile.print(",");      // 7. kilowatt hour
     SDprintDouble(Data_Values[5], 2); Datafile.print(",");      // 8. power factor
-    ***********
-        SDprintDouble(Data_Values[6], 1); Datafile.print(",");      // unknown
-    SDprintDouble(Data_Values[7], 1); Datafile.print(",");      // frequency
-    SDprintDouble(Data_Values[8], 1); Datafile.print(",");      // temperature
-    // weather values
-    SDprintDouble(weather_record.temp, 2); Datafile.print(",");             // weather temperature
-    SDprintDouble(weather_record.pressure, 0); Datafile.print(",");          // weather pressure
-    SDprintDouble(weather_record.humidity, 0); Datafile.print(",");          // weather humidity
-    SDprintDouble(weather_record.wind_direction, 0); Datafile.print(",");    // weather wind direction
-    SDprintDouble(weather_record.wind_speed, 0); Datafile.print(",");       // weather wind speed
-    Datafile.print(weather_record.weather);                                 // weather decription
+    SDprintDouble(Data_Values[6], 1); Datafile.print(",");      // 9. unknown
+    SDprintDouble(Data_Values[7], 1); Datafile.print(",");      // 10. frequency
+    SDprintDouble(Data_Values[8], 1); Datafile.print(",");      // 11. temperature
+    //                                                                      weather values
+    SDprintDouble(weather_record.temp, 2); Datafile.print(",");             // 12. temperature
+    SDprintDouble(weather_record.pressure, 0); Datafile.print(",");         // 13. pressure
+    SDprintDouble(weather_record.humidity, 0); Datafile.print(",");         // 14. humidity
+    SDprintDouble(weather_record.wind_direction, 0); Datafile.print(",");   // 15. wind direction
+    SDprintDouble(weather_record.wind_speed, 0); Datafile.print(",");       // 16. wind speed
+    Datafile.print(weather_record.weather);                                 // 17. description
     Datafile.print("\n");                                      // end of record
     Datafile.close();                                          // close the sd file
     Datafile.flush();                                          // make sure it has been written to SD
     digitalWrite(SD_Active_led_pin, LOW);
-    //    if (Data_Values[0] >= highest_voltage) {
-    //        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
-    //            date_of_highest_voltage[i] = Data_Date[i];
-    //        }
-    //        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-    //            time_of_highest_voltage[i] = Data_Time[i];
-    //        }
-    //        highest_voltage = Data_Values[1];                     // update the largest current value
-    //    }
-    //    if (Data_Values[0] <= lowest_voltage) {
-    //        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
-    //            date_of_lowest_voltage[i] = Data_Date[i];
-    //        }
-    //        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-    //            time_of_lowest_voltage[i] = Data_Time[i];
-    //        }
-    //        lowest_voltage = Data_Values[1];                     // update the largest current value
-    //    }
-    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
-        for (i = 0; i <= Data_Date.length() + 1; i++) {                              // load the date
-            date_of_largest_amperage[i] = Data_Date[i];
+    // highest voltage ------------------------------------------------------------------------------------------------
+    if (Data_Values[0] >= highest_voltage) {
+        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
+            time_of_highest_voltage[i] = Data_Time[i];
         }
-        for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-            time_of_largest_amperage[i] = Data_Time[i];
-        }
-        largest_amperage = Data_Values[1];                     // update the largest current value
+        highest_voltage = Data_Values[0];                       // update the largest current value
     }
-    /*
-        if (weather_record.temp >= highest_temperature) {       // update the highest weather temperature
-            for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
-                date_of_highest_temperature[i] = Data_Date[i];
-            }
-            for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-                time_of_highest_temperature[i] = Data_Time[i];
-            }
-            highest_temperature = weather_record.temp;          // update the highest weather temperature
+    // lowest voltage -------------------------------------------------------------------------------------------------
+    if (Data_Values[0] <= lowest_voltage) {
+        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
+            time_of_lowest_voltage[i] = Data_Time[i];
         }
-        if (weather_record.temp <= lowest_temperature) {        // update the lowest weather temperature
-            for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
-                date_of_lowest_temperature[i] = Data_Date[i];
-            }
-            for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-                time_of_lowest_temperature[i] = Data_Time[i];
-            }
-            lowest_temperature = weather_record.temp;           // update the lowest weather temperature
+        lowest_voltage = Data_Values[0];                        // update the largest current value
+    }
+    // largest amperage -----------------------------------------------------------------------------------------------    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
+    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+        time_of_largest_amperage[i] = Data_Time[i];
+    }
+    largest_amperage = Data_Values[1];                      // update the largest current value
+    // weather information --------------------------------------------------------------------------------------------
+    if (weather_record.temp >= highest_temperature) {           // update the highest weather temperature
+        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
+            time_of_highest_temperature[i] = Data_Time[i];
         }
-        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
-            date_of_latest_pressure[i] = Data_Date[i];
+        highest_temperature = weather_record.temp;              // update the highest weather temperature
+    }
+    // latest temperature ---------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_temperature[i] = Data_Time[i];
+    }
+    latest_temperature = weather_record.temp;                   // update the highest weather temperature
+    // lowest temperature ---------------------------------------------------------------------------------------------
+    if (weather_record.temp <= lowest_temperature) {            // update the lowest weather temperature
+        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
+            time_of_lowest_temperature[i] = Data_Time[i];
         }
-        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-            time_of_latest_pressure[i] = Data_Time[i];
-        }
-        latest_pressure = weather_record.pressure;
-        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
-            date_of_latest_humidity[i] = Data_Date[i];
-        }
-        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-            time_of_latest_humidity[i] = Data_Time[i];
-        }
-        latest_humidity = weather_record.humidity;
-        for (i = 0; i <= Data_Date.length() + 1; i++) {             // load the date
-            date_of_latest_weather[i] = Data_Date[i];
-        }
-        for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-            time_of_latest_weather[i] = Data_Time[i];
-        }
-        latest_weather = weather_record.weather;
-     */
+        lowest_temperature = weather_record.temp;               // update the lowest weather temperature
+    }
+    // pressure -------------------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_pressure[i] = Data_Time[i];
+    }
+    latest_pressure = weather_record.pressure;
+    // humidity -------------------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_humidity[i] = Data_Time[i];
+    }
+    latest_humidity = weather_record.humidity;
+    // wind speed -----------------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_wind_speed[i] = Data_Time[i];
+    }
+    latest_wind_speed = weather_record.wind_speed;
+    // wind direction -------------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_wind_direction[i] = Data_Time[i];
+    }
+    latest_wind_direction = weather_record.wind_direction;
+    // weather description --------------------------------------------------------------------------------------------
+    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+        time_of_latest_weather[i] = Data_Time[i];
+    }
+    latest_weather = weather_record.weather;
+    // ----------------------------------------------------------------------------------------------------------------
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
         console_message = "\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
@@ -638,7 +622,7 @@ void Create_New_Data_File() {
             Datafile.print(RS485_FieldNames[x]);
             Datafile.print(",");
         }
-        Datafile.println(RS485_FieldNames[15]);
+        Datafile.println(RS485_FieldNames[14]);
         Datafile.close();
         Datafile.flush();
         current_data_record_count = 0;
@@ -771,6 +755,7 @@ void Prefill_Array() {
     char dataField[20];
     int datafieldNo = 1;
     char datatemp;
+    double this_temperature = 0;
     current_data_record_count = 0;
     digitalWrite(SD_Active_led_pin, HIGH);
     File dataFile = SD.open("/" + DataFileName, FILE_READ);
@@ -822,6 +807,7 @@ void Prefill_Array() {
                     break;
                 case 12:
                     // weather temperature
+                    this_temperature = atof(dataField);                  // weather temperature
                     break;
                 case 13:
                     // weather pressure
@@ -844,6 +830,37 @@ void Prefill_Array() {
                 datacharacter_count = 0;
             }
             if (datatemp == '\n') {                                                             // end of sd data row
+                if (readings_table[record_count].voltage >= highest_voltage) {
+                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+                        time_of_lowest_voltage[i] = readings_table[record_count].ltime[i];
+                    }
+                    highest_voltage = readings_table[record_count].voltage;
+                }
+                if (readings_table[record_count].voltage <= lowest_voltage) {
+                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+                        time_of_lowest_voltage[i] = readings_table[record_count].ltime[i];
+                    }
+                    lowest_voltage = readings_table[record_count].voltage;                     // update the largest current value
+                }
+                if (readings_table[record_count].amperage >= largest_amperage) {                  // load the maximum amperage value
+                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
+                        time_of_largest_amperage[i] = readings_table[record_count].ltime[i];
+                    }
+                    largest_amperage = readings_table[record_count].amperage;                     // update the largest current value
+                }
+                //                                                          weather information
+                if (this_temperature >= highest_temperature) {       // update the highest weather temperature
+                    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+                        time_of_highest_temperature[i] = readings_table[record_count].ltime[i];
+                    }
+                    highest_temperature = this_temperature;          // update the highest weather temperature
+                }
+                if (this_temperature <= lowest_temperature) {        // update the lowest weather temperature
+                    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
+                        time_of_lowest_temperature[i] = readings_table[record_count].ltime[i];
+                    }
+                    lowest_temperature = this_temperature;           // update the lowest weather temperature
+                }
                 record_count++;                                                                 // increment array pointer
                 current_data_record_count++;                                                    // increment the current_record count
                 if (record_count > table_size) {                                                // if pointer is greater than table size
@@ -1157,8 +1174,8 @@ void Statistics() {                                                 // Display f
     // Last Boot Time -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Last Boot Time and Date: ");
-    webpage += Last_Boot_Date;
+    webpage += F("'>Time the System was Booted : ");
+    webpage += Last_Boot_Time;
     webpage += "</span></strong></p>";
     // ----------------------------------------------------------------------------------------------------------------
     webpage += F("<p ");
@@ -1169,100 +1186,93 @@ void Statistics() {                                                 // Display f
     // Highest Voltage ------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Highest Voltage on ");
-    webpage += String(date_of_highest_voltage) + " at ";
-    webpage += String(time_of_highest_voltage) + " = ";
-    webpage += String(highest_voltage) + "ma";
+    webpage += F("'>Highest Voltage was Recorded at ");
+    webpage += String(time_of_highest_voltage) + " : ";
+    webpage += String(highest_voltage) + " volts";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Lowest Voltage -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Lowest Voltage on ");
-    webpage += String(date_of_lowest_voltage) + " at ";
-    webpage += String(time_of_lowest_voltage) + " = ";
-    webpage += String(lowest_voltage) + "ma";
+    webpage += F("'>Lowest Voltage was Recorded at ");
+    webpage += String(time_of_lowest_voltage) + " : ";
+    webpage += String(lowest_voltage) + " volts";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Greatest Amperage ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Greatest Amperage on ");
-    webpage += String(date_of_largest_amperage) + " at ";
-    webpage += String(time_of_largest_amperage) + " = ";
-    webpage += String(largest_amperage) + "ma";
+    webpage += F("'>Greatest Amperage was Recorded at ");
+    webpage += String(time_of_largest_amperage) + " : ";
+    webpage += String(largest_amperage) + " ma";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Latest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Temperature: ");
-    webpage += String(date_of_latest_temperature) + " at ";
-    webpage += String(time_of_latest_temperature) + " = ";
-    webpage += String(latest_temperature) + "ma";
+    webpage += F("'>Latest Weather Temperature was Recorded at ");
+    webpage += String(time_of_latest_temperature) + " : ";
+    webpage += String(latest_temperature, 2);
+    webpage += F("&deg;C");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Lowest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Lowest Temperature: ");
-    webpage += String(date_of_lowest_temperature) + " at ";
-    webpage += String(time_of_lowest_temperature) + " = ";
-    webpage += String(lowest_temperature) + "ma";
+    webpage += F("'>Lowest Weather Temperature was Recorded at ");
+    webpage += String(time_of_lowest_temperature) + " : ";
+    webpage += String(lowest_temperature, 2);
+    webpage += F("&deg;C");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Highest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Highest Temperature: ");
-    webpage += String(date_of_highest_temperature) + " at ";
-    webpage += String(time_of_highest_temperature) + " = ";
-    webpage += String(highest_temperature) + "ma";
+    webpage += F("'>Highest Weather Temperature was Recorded at ");
+    webpage += String(time_of_highest_temperature) + " : ";
+    webpage += String(highest_temperature, 2);
+    webpage += F("&deg;C");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Humidity -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Humidity: ");
-    webpage += String(date_of_latest_humidity) + " at ";
-    webpage += String(time_of_latest_humidity) + " = ";
-    webpage += String(latest_humidity) + "ma";
+    webpage += F("'>Latest Weather Humidity Recorded at ");
+    webpage += String(time_of_latest_humidity) + " : ";
+    webpage += String(latest_humidity) + "%";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Pressure -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Pressure: ");
-    webpage += String(date_of_latest_pressure) + " at ";
-    webpage += String(time_of_latest_pressure) + " = ";
-    webpage += String(latest_pressure) + "ma";
+    webpage += F("'>Latest Atmospheric Pressure Recorded at ");
+    webpage += String(time_of_latest_pressure) + " : ";
+    webpage += String(latest_pressure) + " millibar";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Description: ");
-    webpage += String(date_of_latest_weather) + " at ";
-    webpage += String(time_of_latest_weather) + " = ";
-    webpage += String(latest_weather) + "ma";
+    webpage += F("'>Latest Weather Description Recorded at ");
+    webpage += String(time_of_latest_weather) + " : ";
+    webpage += String(latest_weather);
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Wind Speed -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Wind Speed: ");
-    webpage += String(date_of_latest_wind_speed) + " at ";
-    webpage += String(time_of_latest_wind_speed) + " = ";
-    webpage += String(latest_wind_speed) + "ma";
+    webpage += F("'>Latest Weather Wind Speed Recorded at ");
+    webpage += String(time_of_latest_wind_speed) + " : ";
+    webpage += String(latest_wind_speed) + "m/s";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Direction -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Wind Direction: ");
-    webpage += String(date_of_latest_wind_direction) + " at ";
-    webpage += String(time_of_latest_wind_direction) + " = ";
-    webpage += String(latest_wind_direction) + "ma";
+    webpage += F("'>Weather Latest Wind Direction Recorded at ");
+    webpage += String(time_of_latest_wind_direction) + " : ";
+    webpage += String(latest_wind_direction);
+    webpage += F("&deg;");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // File Count -----------------------------------------------------------------------------------------------------
@@ -1316,14 +1326,21 @@ void Delete_Files() {                                                           
     Write_Console_Message();
     webpage = "";
     Page_Header(false, "Energy Monitor Delete Files");
+#ifndef ALLOW_WORKING_FILE_DELETION
     if (file_count > 3) {
+#endif
         for (i = 1; i < file_count; i++) {
-            if (FileNames[i] != DataFileName && FileNames[i] != ConsoleFileName) {                            // do not list the current file
+#ifndef ALLOW_WORKING_FILE_DELETION
+            if (FileNames[i] != DataFileName && FileNames[i] != ConsoleFileName) {   // do not list the current file
+#endif
                 webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
                 webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
                 webpage += "</h3>";
+#ifndef ALLOW_WORKING_FILE_DELETION
             }
+#endif
         }
+#ifndef ALLOW_WORKING_FILE_DELETION
     }
     else {
         webpage += F("<h3 ");
@@ -1331,6 +1348,7 @@ void Delete_Files() {                                                           
         webpage += F(">No Deletable Files");
         webpage += F("</span></strong></h3>");
     }
+#endif
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
@@ -1338,11 +1356,15 @@ void Delete_Files() {                                                           
 void Del_File() {                                                       // web request to delete a file
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
+#ifndef ALLOW_WORKING_FILE_DELETION
     if (fileName != ("/" + DataFileName)) {                            // do not delete the current file
-        console_message = DataFileName + "Removed";
-        Write_Console_Message();
+#endif
         SD.remove(fileName);
+        console_message = DataFileName + " Removed";
+        Write_Console_Message();
+#ifndef ALLOW_WORKING_FILE_DELETION
     }
+#endif
     int file_count = Count_Files_on_SD_Drive();                         // this counts and creates an array of file names on SD
     webpage = "";                                                       // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Delete Files");
@@ -1557,8 +1579,8 @@ int Count_Files_on_SD_Drive() {
             File datafile = SD.open("/" + filename, FILE_READ);     // Now read data from FS
             if (datafile) {                                         // if there is a file
                 FileNames[file_count] = filename;
-                console_message = "File " + String(file_count) + " filename " + String(filename);
-                Write_Console_Message();
+                //                console_message = "File " + String(file_count) + " filename " + String(filename);
+                //                Write_Console_Message();
                 file_count++;                                       // increment the file count
             }
             datafile.close(); // close the file:
@@ -1909,6 +1931,7 @@ void printDouble(double val, byte precision) {
     }
     Write_Console_Message();
 }
+
 void SDprintDouble(double val, byte precision) {
     Datafile.print(int(val));  //prints the int part
     if (precision > 0) {
@@ -1955,6 +1978,7 @@ Weather Payload :
         "sys" : {"type":2, "id" : 2016598, "country" : "GB", "sunrise" : 1671004889, "sunset" : 1671033394},
         "timezone" : 0, "id" : 2656192, "name" : "Basingstoke", "cod" : 200
 }
+{"coord":{"lon":-1.0871,"lat":51.2625},"weather":[{"id":701,"main":"Mist","description":"mist","icon":"50n"}],"base":"stations","main":{"temp":270.23,"feels_like":270.23,"temp_min":267.96,"temp_max":272.7,"pressure":1019,"humidity":92},"visibility":3900,"wind":{"speed":1.03,"deg":200},"clouds":{"all":5},"dt":1671213908,"sys":{"type":2,"id":2016598,"country":"GB","sunrise":1671177787,"sunset":1671206207},"timezone":0,"id":2656192,"name":"Basingstoke","cod":200}
 
 Post Processing:
     float temp = (float)(root["main"]["temp"]) - 273.15;    // get temperature
@@ -1962,6 +1986,7 @@ Post Processing:
     Humidity is in %.
     Wind speed in m / s(meters per second)
     Wind degree in degrees(°).
+
 */
 void Parse_Weather_Info(String payload) {
     //   console.println(payload);
@@ -1972,49 +1997,50 @@ void Parse_Weather_Info(String payload) {
     parse(payload, temp_start, temp_end);
     weather_record.temp = (double)(atof(Parse_Output)) - (double)273.15;
     // Pressure -------------------------------------------------------------------------------------------------------
-    int pressure_start = payload.indexOf("pressure\":");                // "pressure":1007,
+    int pressure_start = payload.indexOf("pressure\":");        // "pressure":1007,
     pressure_start = payload.indexOf(":", pressure_start);
     int pressure_end = payload.indexOf(",", pressure_start);
     parse(payload, pressure_start, pressure_end);
-    weather_record.pressure = (int)atof(Parse_Output) / (int)100;
+    weather_record.pressure = (int)atof(Parse_Output);
     // humidity -------------------------------------------------------------------------------------------------------
-    int humidity_start = payload.indexOf("humidity\":");                // "humidity":95}
+    int humidity_start = payload.indexOf("humidity\":");        // "humidity":95}
     humidity_start = payload.indexOf(":", humidity_start);
     int humidity_end = payload.indexOf("}", humidity_start);
     parse(payload, humidity_start, humidity_end);
-    weather_record.humidity = (int)atof(Parse_Output) / (int)10000;
-    // weather --------------------------------------------------------------------------------------------------------
-    int weather_start = payload.indexOf("description");            // "weather" : [{"id":701, "main" : "Mist", "description":"mist", "icon" : "50n"}] ,
+    weather_record.humidity = (int)atof(Parse_Output);
+    // weather description --------------------------------------------------------------------------------------------
+    int weather_start = payload.indexOf("main");            // "weather" : [{"id":701, "main" : "Mist", "description":"mist", "icon" : "50n"}] ,
     weather_start = payload.indexOf(":", weather_start);            // "description":"clear sky","icon"
     weather_start = weather_start + 2;
     int weather_end = payload.indexOf("\"", weather_start);
     parse(payload, weather_start - 1, weather_end);
     weather_record.weather = String(Parse_Output);
     // wind speed -----------------------------------------------------------------------------------------------------
-    int wins_start = payload.indexOf("speed\":");                       // "speed":2.57,
+    int wins_start = payload.indexOf("speed");                       // "speed":2.57,
     wins_start = payload.indexOf(":", wins_start);
     int wins_end = payload.indexOf(",", wins_start);
     parse(payload, wins_start, wins_end);
     weather_record.wind_speed = (double)(atof(Parse_Output));
     // wind direction -------------------------------------------------------------------------------------------------
-    int wind_start = payload.indexOf("deg\":");                         // "deg":20
+    int wind_start = payload.indexOf("deg");                         // "deg":20
     wind_start = payload.indexOf(":", wind_start);
     int wind_end = payload.indexOf("}", wind_start);
     parse(payload, wind_start, wind_end);
-    weather_record.wind_direction = (int)atof(Parse_Output) / (int)10;
-
-    //   console.print("Weather Temperature: "); console.println(weather_record.temp, DEC);
-    //   console.print("Weather Pressure: "); console.println(weather_record.pressure, DEC);
-    //   console.print("Weather Humidity: "); console.println(weather_record.humidity, DEC);
-    //   console.print("Weather Wind Direction: "); console.println(weather_record.wind_direction, DEC);
-    //   console.print("Weather Wind Speed: "); console.println(weather_record.wind_speed, DEC);
-    //   console.print("Weather Description: "); console.println(weather_record.weather);
-    //   while (1);
+    weather_record.wind_direction = (int)atof(Parse_Output);
+#ifdef DISPLAY_WEATHER_INFORMATION
+    console.println(payload);
+    console.print("Parsed Temperature: "); console.println(weather_record.temp, DEC);
+    console.print("Parsed Pressure: "); console.println(weather_record.pressure, DEC);
+    console.print("Parsed Humidity: "); console.println(weather_record.humidity, DEC);
+    console.print("Parsed Wind Direction: "); console.println(weather_record.wind_direction, DEC);
+    console.print("Parsed Wind Speed: "); console.println(weather_record.wind_speed, DEC);
+    console.print("Parsed Description: "); console.println(weather_record.weather);
+#endif
 }
 void parse(String payload, int start, int end) {
     int ptr = 0;
     for (int pos = start + 1; pos < end; pos++) {
         Parse_Output[ptr++] = payload[pos];
     }
-    Parse_Output[end] = '\0';
+    Parse_Output[ptr] = '\0';
 }
