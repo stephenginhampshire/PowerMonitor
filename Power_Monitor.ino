@@ -14,7 +14,7 @@ Change Record
 */
 String version = "V9.5";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
-#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
+//#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
@@ -644,18 +644,20 @@ void Write_Console_Message() {
     String Date;
     String Time;
     unsigned long milliseconds = millis();
+    String pre_date = "1951/18/11";
+    String pre_time = "00:00:00";
     if (Post_Setup_Status) {                                                // only write the console message to disk once setup is complete
-        if (pre_loop_message_count > 0) {
+        if (pre_loop_message_count > 0) {                                   // are there any pre loop console messages stored
             for (int x = 0; x < pre_loop_message_count; x++) {
-                console_message = pre_loop_messages[pre_loop_message_count];
-                Write_New_Console_Message_to_Console_File(Date, Time, pre_loop_millis_values[x]);
-                Add_New_Console_Message_to_Console_Table(Date, Time, pre_loop_millis_values[x]);
+                console_message = pre_loop_messages[x];
+                Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_millis_values[x]);
+                Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_millis_values[x]);
             }
             pre_loop_message_count = 0;
         }
-        console_message = saved_console_message;                            // restore the console_message
         Date = GetDate(true);
         Time = GetTime(true);
+        console_message = saved_console_message;                            // restore the current console_message
         Write_New_Console_Message_to_Console_File(Date, Time, milliseconds);
         Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds);
     }
@@ -1159,7 +1161,7 @@ void Statistics() {                                                 // Display f
         SD_freespace = (SD.totalBytes() - SD.usedBytes());
     }
     webpage = ""; // don't delete this command, it ensures the server works reliably!
-    Page_Header(false, "Energy Monitor Statistics");
+    Page_Header(true, "Energy Monitor Statistics");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
@@ -1360,7 +1362,7 @@ void Delete_Files() {                                                           
 #endif
         }
 #ifndef ALLOW_WORKING_FILE_DELETION
-}
+    }
     else {
         webpage += F("<h3 ");
         webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
@@ -1371,7 +1373,7 @@ void Delete_Files() {                                                           
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
-    }
+}
 void Del_File() {                                                       // web request to delete a file
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
@@ -1954,7 +1956,6 @@ void printDouble(double val, byte precision) {
     }
     Write_Console_Message();
 }
-
 void SDprintDouble(double val, byte precision) {
     Datafile.print(int(val));  //prints the int part
     if (precision > 0) {
@@ -1977,40 +1978,6 @@ void SDprintDouble(double val, byte precision) {
         Datafile.print(frac, DEC);
     }
 }
-/*
-Weather Payload :
-{
-    "coord":{"lon":-1.0871, "lat" : 51.2625},
-        "weather" : [{"id":701, "main" : "Mist", "description" : "mist", "icon" : "50n"}] ,
-        "base" : "stations",
-        "main" : {
-                    "temp":272.77,
-                    "feels_like":269.61,
-                    "temp_min":271.64,
-                    "temp_max":274.14,
-                    "pressure":1007,
-                    "humidity":95
-                 },
-        "visibility" : 7000,
-        "wind" : {
-                    "speed":2.57,
-                    "deg":20
-                 },
-        "clouds" : {"all":100},
-        "dt" : 1671039606,
-        "sys" : {"type":2, "id" : 2016598, "country" : "GB", "sunrise" : 1671004889, "sunset" : 1671033394},
-        "timezone" : 0, "id" : 2656192, "name" : "Basingstoke", "cod" : 200
-}
-{"coord":{"lon":-1.0871,"lat":51.2625},"weather":[{"id":701,"main":"Mist","description":"mist","icon":"50n"}],"base":"stations","main":{"temp":270.23,"feels_like":270.23,"temp_min":267.96,"temp_max":272.7,"pressure":1019,"humidity":92},"visibility":3900,"wind":{"speed":1.03,"deg":200},"clouds":{"all":5},"dt":1671213908,"sys":{"type":2,"id":2016598,"country":"GB","sunrise":1671177787,"sunset":1671206207},"timezone":0,"id":2656192,"name":"Basingstoke","cod":200}
-
-Post Processing:
-    float temp = (float)(root["main"]["temp"]) - 273.15;    // get temperature
-    float pressure = (float)(root["main"]["pressure"]) / 1000;   // get pressure
-    Humidity is in %.
-    Wind speed in m / s(meters per second)
-    Wind degree in degrees(°).
-
-*/
 void Parse_Weather_Info(String payload) {
     //   console.println(payload);
        // Temperature ----------------------------------------------------------------------------------------------------
