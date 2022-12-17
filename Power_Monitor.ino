@@ -11,8 +11,9 @@ Change Record
 11/12/2022  9.3 SD saving and Webpage viewing of console messages added
 14/12/2022  9.4 Added weather information to data file
 16/12/2022  9.5 Add more statistics to statistics page
+17/12/2022  9.6 Corrected issue with Delete Files, where operational files were displayed after file removed
 */
-String version = "V9.5";                // software version number, shown on webpage
+String version = "V9.6";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -1163,19 +1164,22 @@ void Statistics() {                                                 // Display f
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(true, "Energy Monitor Statistics");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
+    // Data File Size -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F(">Current Data Log file size = ");
+    webpage += F(">Current Data file size = ");
     webpage += String(datafile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
+    // Console File Size ----------------------------------------------------------------------------------------------
     File consolefile = SD.open("/" + ConsoleFileName, FILE_READ);  // Now read data from FS
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F(">Current Console Log file size = ");
+    webpage += F(">Current Console file size = ");
     webpage += String(consolefile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
+    // Freespace ------------------------------------------------------------------------------------------------------
     if (SD_freespace < critical_SD_freespace) {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
@@ -1192,6 +1196,11 @@ void Statistics() {                                                 // Display f
         webpage += F(" MB");
         webpage += "</span></strong></p>";
     }
+    // File Count -----------------------------------------------------------------------------------------------------
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'> Number of Files on SD : ");
+    webpage += String(file_count - 1);
+    webpage += "</span></strong></p>";
     // Last Boot Time -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
@@ -1231,7 +1240,7 @@ void Statistics() {                                                 // Display f
     // Weather Latest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Weather Temperature was Recorded at ");
+    webpage += F("'>Latest Outside Temperature was Recorded at ");
     webpage += String(time_of_latest_temperature) + " : ";
     webpage += String(latest_temperature, 2);
     webpage += F("&deg;C");
@@ -1240,7 +1249,7 @@ void Statistics() {                                                 // Display f
     // Weather Lowest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Lowest Weather Temperature was Recorded at ");
+    webpage += F("'>Lowest Outside Temperature was Recorded at ");
     webpage += String(time_of_lowest_temperature) + " : ";
     webpage += String(lowest_temperature, 2);
     webpage += F("&deg;C");
@@ -1249,7 +1258,7 @@ void Statistics() {                                                 // Display f
     // Weather Highest Temperature -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Highest Weather Temperature was Recorded at ");
+    webpage += F("'>Highest Outside Temperature was Recorded at ");
     webpage += String(time_of_highest_temperature) + " : ";
     webpage += String(highest_temperature, 2);
     webpage += F("&deg;C");
@@ -1258,7 +1267,7 @@ void Statistics() {                                                 // Display f
     // Weather Humidity -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Weather Humidity Recorded at ");
+    webpage += F("'>Latest Relative Humidity Recorded at ");
     webpage += String(time_of_latest_humidity) + " : ";
     webpage += String(latest_humidity) + "%";
     webpage += "</span></strong></p>";
@@ -1282,7 +1291,7 @@ void Statistics() {                                                 // Display f
     // Weather Wind Speed -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Weather Wind Speed Recorded at ");
+    webpage += F("'>Latest Wind Speed Recorded at ");
     webpage += String(time_of_latest_wind_speed) + " : ";
     webpage += String(latest_wind_speed) + "m/s";
     webpage += "</span></strong></p>";
@@ -1290,17 +1299,13 @@ void Statistics() {                                                 // Display f
     // Weather Direction -------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Weather Latest Wind Direction Recorded at ");
+    webpage += F("'>Latest Wind Direction Recorded at ");
     webpage += String(time_of_latest_wind_direction) + " : ";
     webpage += String(latest_wind_direction);
     webpage += F("&deg;");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // File Count -----------------------------------------------------------------------------------------------------
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'> Number of Files on SD : ");
-    webpage += String(file_count - 1);
-    webpage += "</span></strong></p>";
+    // ----------------------------------------------------------------------------------------------------------------
     datafile.close();
     Page_Footer();
     server.send(200, "text/html", webpage);
@@ -1389,11 +1394,29 @@ void Del_File() {                                                       // web r
     int file_count = Count_Files_on_SD_Drive();                         // this counts and creates an array of file names on SD
     webpage = "";                                                       // don't delete this command, it ensures the server works reliably!
     Page_Header(false, "Energy Monitor Delete Files");
-    for (i = 1; i < file_count; i++) {
-        webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-        webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
-        webpage += "</h3>";
+#ifndef ALLOW_WORKING_FILE_DELETION
+    if (file_count > 3) {
+#endif
+        for (i = 1; i < file_count; i++) {
+#ifndef ALLOW_WORKING_FILE_DELETION
+            if (FileNames[i] != DataFileName && FileNames[i] != ConsoleFileName) {   // do not list the current file
+#endif
+                webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
+                webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
+                webpage += "</h3>";
+#ifndef ALLOW_WORKING_FILE_DELETION
+            }
+#endif
+        }
+#ifndef ALLOW_WORKING_FILE_DELETION
     }
+    else {
+        webpage += F("<h3 ");
+        webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+        webpage += F(">No Deletable Files");
+        webpage += F("</span></strong></h3>");
+    }
+#endif
     Page_Footer();
     server.send(200, "text/html", webpage);
     webpage = "";
