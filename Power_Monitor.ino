@@ -12,8 +12,9 @@ Change Record
 14/12/2022  9.4 Added weather information to data file
 16/12/2022  9.5 Add more statistics to statistics page
 17/12/2022  9.6 Corrected issue with Delete Files, where operational files were displayed after file removed
+20/12/2022  9.7 Corrected an issue where if the date changed new file creation would be continuously repeated
 */
-String version = "V9.6";                // software version number, shown on webpage
+String version = "V9.7";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -235,6 +236,7 @@ char Parse_Output[25];
 String pre_loop_messages[100];
 unsigned long pre_loop_millis_values[100];
 int pre_loop_message_count = 0;
+bool New_Day_File_Required = true;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
@@ -408,9 +410,13 @@ void loop() {
             // sensor end ---------------------------------------------------------------------------------------------
             Data_Date = GetDate(true);                              // get the date of the reading
             Data_Time = GetTime(true);                              // get the time of the reading
-            if (This_Date != GetDate(false)) {                      // has date changed
+            if (This_Date != GetDate(false) && New_Day_File_Required == true) {
                 Create_New_Data_File();                             // so create a new Data File with new file name
                 Create_New_Console_File();
+                New_Day_File_Required = false;
+            }
+            else {
+                New_Day_File_Required = true;                       // reset the flag
             }
             Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
             Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
@@ -631,6 +637,7 @@ void Create_New_Data_File() {
         Datafile.flush();
         current_data_record_count = 0;
         digitalWrite(SD_Active_led_pin, LOW);
+        This_Date = GetDate(false);                                 // update the current date
         console_message = "Data File Created " + DataFileName;
         Write_Console_Message();
     }
