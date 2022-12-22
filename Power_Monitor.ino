@@ -13,8 +13,9 @@ Change Record
 16/12/2022  9.5 Add more statistics to statistics page
 17/12/2022  9.6 Corrected issue with Delete Files, where operational files were displayed after file removed
 20/12/2022  9.7 Corrected an issue where if the date changed new file creation would be continuously repeated
+22/12/2022  9.8 Web data arrays cleared when date changed, SD flashes during Preloading
 */
-String version = "V9.7";                // software version number, shown on webpage
+String version = "V9.8";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -237,6 +238,8 @@ String pre_loop_messages[100];
 unsigned long pre_loop_millis_values[100];
 int pre_loop_message_count = 0;
 bool New_Day_File_Required = true;
+unsigned long sd_off_time = 0;
+unsigned long sd_on_time = 0;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
     console.begin(console_Baudrate);                                                    // enable the console
@@ -413,6 +416,7 @@ void loop() {
             if (This_Date != GetDate(false) && New_Day_File_Required == true) {
                 Create_New_Data_File();                             // so create a new Data File with new file name
                 Create_New_Console_File();
+                Clear_Arrays();
                 New_Day_File_Required = false;
             }
             else {
@@ -437,16 +441,17 @@ void Write_New_Data_Record_to_Data_File() {
         }
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
-    Datafile.print(Data_Date); Datafile.print(",");             // 1. dd/mm/yyyy,
-    Datafile.print(Data_Time); Datafile.print(",");             // 2. dd/mm/yyyy,hh:mm:ss,
-    SDprintDouble(Data_Values[0], 1); Datafile.print(",");      // 3. voltage
-    SDprintDouble(Data_Values[1], 3); Datafile.print(",");      // 4. amperage
-    SDprintDouble(Data_Values[2], 2); Datafile.print(",");      // 5. wattage
-    SDprintDouble(Data_Values[3], 1); Datafile.print(",");      // 6. up time
-    SDprintDouble(Data_Values[4], 3); Datafile.print(",");      // 7. kilowatt hour
-    SDprintDouble(Data_Values[5], 2); Datafile.print(",");      // 8. power factor
-    SDprintDouble(Data_Values[6], 1); Datafile.print(",");      // 9. unknown
-    SDprintDouble(Data_Values[7], 1); Datafile.print(",");      // 10. frequency
+    console.print(millis(), DEC); console.println("\tNew Data Record Written");
+    Datafile.print(Data_Date); Datafile.print(",");                 // 1. dd/mm/yyyy,
+    Datafile.print(Data_Time); Datafile.print(",");                 // 2. dd/mm/yyyy,hh:mm:ss,
+    SDprintDouble(Data_Values[0], 1); Datafile.print(",");          // 3. voltage
+    SDprintDouble(Data_Values[1], 3); Datafile.print(",");          // 4. amperage
+    SDprintDouble(Data_Values[2], 2); Datafile.print(",");          // 5. wattage
+    SDprintDouble(Data_Values[3], 1); Datafile.print(",");          // 6. up time
+    SDprintDouble(Data_Values[4], 3); Datafile.print(",");          // 7. kilowatt hour
+    SDprintDouble(Data_Values[5], 2); Datafile.print(",");          // 8. power factor
+    SDprintDouble(Data_Values[6], 1); Datafile.print(",");          // 9. unknown
+    SDprintDouble(Data_Values[7], 1); Datafile.print(",");          // 10. frequency
     SDprintDouble(Data_Values[8], 1); Datafile.print(",");      // 11. temperature
     //                                                                      weather values
     SDprintDouble(weather_record.temp, 2); Datafile.print(",");             // 12. temperature
@@ -786,7 +791,7 @@ void Prefill_Array() {
     char datatemp;
     double this_temperature = 0;
     current_data_record_count = 0;
-    digitalWrite(SD_Active_led_pin, HIGH);
+    SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
     File dataFile = SD.open("/" + DataFileName, FILE_READ);
     if (dataFile) {
         while (dataFile.available()) {                                           // throw the first row, column headers, away
@@ -796,6 +801,7 @@ void Prefill_Array() {
         console_message = "Loading datafile from " + String(DataFileName);
         Write_Console_Message();
         while (dataFile.available()) {                                           // do while there are data available
+            Flash_SD_LED();                                                     // flash the sd led
             datatemp = dataFile.read();
             dataField[datacharacter_count++] = datatemp;                            // add it to the csvfield string
             if (datatemp == ',' || datatemp == '\n') {                                  // look for end of field
@@ -913,7 +919,9 @@ void Prefill_Array() {
         } // end of while
     }
     dataFile.close();
-    digitalWrite(SD_Active_led_pin, LOW);
+    console_message = "Loaded Data Records: " + String(current_data_record_count);
+    Write_Console_Message();
+    SD_Led_Flash_Start_Stop(false);
 }
 void Prefill_Console_Array() {
     int console_character_count = 0;
@@ -921,12 +929,13 @@ void Prefill_Console_Array() {
     int console_fieldNo = 1;
     char console_temp;
     current_console_record_count = 0;
-    digitalWrite(SD_Active_led_pin, HIGH);
+    SD_Led_Flash_Start_Stop(true);
     File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
     if (consoleFile) {
         console_message = "Loading console file from " + String(ConsoleFileName);
         Write_Console_Message();
         while (consoleFile.available()) {                                       // do while there are data available
+            Flash_SD_LED();
             console_temp = consoleFile.read();                                  // read a character from the file
             console_txtField[console_character_count++] = console_temp;         // add it to the consolefield string
             if (console_temp == ',' || console_temp == '\n') {                  // look for end of field
@@ -970,7 +979,7 @@ void Prefill_Console_Array() {
     consoleFile.close();
     console_message = "Loaded Console Records: " + String(current_console_record_count);
     Write_Console_Message();
-    digitalWrite(SD_Active_led_pin, LOW);
+    SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
     String log_time;
@@ -1204,6 +1213,7 @@ void Statistics() {                                                 // Display f
         webpage += "</span></strong></p>";
     }
     // File Count -----------------------------------------------------------------------------------------------------
+    webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'> Number of Files on SD : ");
     webpage += String(file_count - 1);
@@ -1903,6 +1913,59 @@ void Check_Boot_Switch() {
         booted = false;
     }
     return;
+}
+void Clear_Arrays() {                                           // clear the web arrays of old records
+    for (int x = 0; x < console_table_size; x++) {
+        for (int y = 0; y < 10; y++) {
+            console_table[x].ldate[y] = '0';
+        }
+        for (int y = 0; y < 8; y++) {
+            console_table[x].ltime[y] = '0';
+        }
+        for (int y = 0; y < 100; y++) {
+            console_table[x].message[y] = '0';
+        }
+        console_table[x].milliseconds = 0;
+    }
+    for (int x = 0; x < table_size; x++) {
+        for (int y = 0; y < 10; y++) {
+            readings_table[x].ldate[x] = '0';
+        }
+        for (int y = 0; y < 8; y++) {
+            readings_table[x].ltime[y] = '0';
+        }
+        readings_table[x].amperage = 0;
+        readings_table[x].frequency = 0;
+        readings_table[x].kilowatthour = 0;
+        readings_table[x].powerfactor = 0;
+        readings_table[x].temperature = 0;
+        readings_table[x].unknown = 0;
+        readings_table[x].uptime = 0;
+        readings_table[x].voltage = 0;
+        readings_table[x].wattage = 0;
+    }
+}
+void SD_Led_Flash_Start_Stop(bool state) {
+    if (state) {
+        digitalWrite(SD_Active_led_pin, HIGH);                  // turn the led on (flash)
+        sd_on_time = millis();                                  // set the start time (immediate)
+        sd_off_time = millis() + (unsigned long)300;            // set the stoptime (start + period)
+    }
+    else {
+        digitalWrite(SD_Active_led_pin, LOW);                   // turn the led off
+    }
+}
+void Flash_SD_LED() {
+    if (millis() > sd_on_time && millis() < sd_off_time) {      // turn the led on (flash)
+        digitalWrite(SD_Active_led_pin, HIGH);
+    }
+    else {
+        digitalWrite(SD_Active_led_pin, LOW);
+    }
+    if (millis() >= (sd_off_time)) {                             // turn the led on (flash)
+        sd_on_time = millis() + (unsigned long)300;                // set the next on time (flash)
+        sd_off_time = millis() + (unsigned long)600;
+    }
 }
 String GetDate(bool format) {
     int connection_attempts = 0;
