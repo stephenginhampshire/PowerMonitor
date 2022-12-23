@@ -14,8 +14,9 @@ Change Record
 17/12/2022  9.6 Corrected issue with Delete Files, where operational files were displayed after file removed
 20/12/2022  9.7 Corrected an issue where if the date changed new file creation would be continuously repeated
 22/12/2022  9.8 Web data arrays cleared when date changed, SD flashes during Preloading
+23/12/2022  9.9 Requirement to press start button removed
 */
-String version = "V9.8";                // software version number, shown on webpage
+String version = "V9.9";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -39,6 +40,7 @@ String version = "V9.8";                // software version number, shown on web
 #include <HTTP_Method.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include <stdio.h>
 const char* ssid = "Woodleigh";
 const char* password = "2008198399";
 const char* ntpServer = "pool.ntp.org";
@@ -46,15 +48,25 @@ const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0;                             // offset for the date and time function
 const char city[] = { "Basingstoke\0" };
 const char region[] = { "uk\0" };
+
+String WiFi_Status_Message[7] = {
+                    "WL_IDLE_STATUS",       // temporary status assigned when WiFi.begin() is called
+                    "WL_NO_SSID_AVAIL",     // when no SSID are available
+                    "WL_SCAN_COMPLETED",    // scan networks is completed
+                    "WL_CONNECTED",         // when connected to a WiFi network
+                    "WL_CONNECT_FAILED",    // when the connection fails for all the attempts
+                    "WL_CONNECTION_LOST",   // when the connection is lost
+                    "WL_DISCONNECTED",      // when disconnected from a network
+};
 const char  incomplete_weather_api_link[] = { "http://api.openweathermap.org/data/2.5/weather?q=#&APPID=917ddeff21dff2cfc5e57717f809d6ad\0" };
 constexpr long console_Baudrate = 115200;
 constexpr long RS485_Baudrate = 9600;                           // baud rate of RS485 Port
 // ESP32 Pin Definitions ----------------------------------------------------------------------------------------------
-constexpr int WipeSD_switch_pin = 32;
-constexpr int Reset_switch_pin = 33;
-constexpr int Start_switch_pin = 27;
+constexpr int Blue_Switch_pin = 32;
+constexpr int Red_Switch_pin = 33;
+constexpr int Green_Switch_pin = 27;
 constexpr int Running_led_pin = 26;
-constexpr int Boot_switch_pin = 0;
+constexpr int Yellow_Switch_pin = 0;
 constexpr int SD_Active_led_pin = 4;
 constexpr int RS485_Enable_pin = 22;
 constexpr int RS485_TX_pin = 17;
@@ -73,10 +85,10 @@ String This_Minute = "";
 String This_Second = "";
 String This_Date = "";
 // Instantiations -----------------------------------------------------------------------------------------------------
-Bounce Reset = Bounce();
-Bounce Start = Bounce();
-Bounce SD_switch = Bounce();
-Bounce Boot = Bounce();
+Bounce Red_Switch = Bounce();
+Bounce Green_Switch = Bounce();
+Bounce Blue_Switch = Bounce();
+Bounce Yellow_Switch = Bounce();
 WebServer server(80);                   // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
 HTTPClient http;
@@ -151,8 +163,7 @@ double Data_Values[9] = {
                         0.0,            // Hz
                         0.0,            // degC
 };
-bool started = false;                                   // used to indicate run switch has been pressed and readings are being taken
-bool booted = false;
+bool Yellow_Switch_Pressed = false;
 String site_width = "1060";                             // width of web page
 String site_height = "600";                             // height of web page
 int const table_size = 72;
@@ -175,7 +186,6 @@ typedef struct {
     double temperature;
 } record_type;
 record_type readings_table[table_size + 1];
-record_type a_readings_table[table_size + 1];
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double lowest_voltage = 0;
 String time_of_lowest_voltage = "00:00:00";
@@ -240,29 +250,30 @@ int pre_loop_message_count = 0;
 bool New_Day_File_Required = true;
 unsigned long sd_off_time = 0;
 unsigned long sd_on_time = 0;
+int WiFi_Signal_Strength = 0;
 // setup --------------------------------------------------------------------------------------------------------------
 void setup() {
-    console.begin(console_Baudrate);                                                    // enable the console
-    while (!console);                                                                    // wait for port to settle
+    console.begin(console_Baudrate);                                            // enable the console
+    while (!console);                                                           // wait for port to settle
     delay(4000);
     console_message = "Booting - Commencing Setup";
     Write_Console_Message();
     pinMode(SD_Active_led_pin, OUTPUT);
-    pinMode(Start_switch_pin, INPUT_PULLUP);
-    pinMode(Reset_switch_pin, INPUT_PULLUP);
-    pinMode(WipeSD_switch_pin, INPUT_PULLUP);
-    pinMode(Boot_switch_pin, INPUT_PULLUP);
+    pinMode(Green_Switch_pin, INPUT_PULLUP);
+    pinMode(Red_Switch_pin, INPUT_PULLUP);
+    pinMode(Blue_Switch_pin, INPUT_PULLUP);
+    pinMode(Yellow_Switch_pin, INPUT_PULLUP);
     pinMode(Running_led_pin, OUTPUT);
-    Reset.attach(Reset_switch_pin);     // setup defaults for debouncing switches
-    Start.attach(Start_switch_pin);
-    SD_switch.attach(WipeSD_switch_pin);
-    Boot.attach(Boot_switch_pin);
-    Reset.interval(5);                  // sets debounce time
-    Start.interval(5);
-    SD_switch.interval(5);
-    Reset.update();
-    Start.update();
-    SD_switch.update();
+    Red_Switch.attach(Red_Switch_pin);     // setup defaults for debouncing switches
+    Green_Switch.attach(Green_Switch_pin);
+    Blue_Switch.attach(Blue_Switch_pin);
+    Yellow_Switch.attach(Yellow_Switch_pin);
+    Red_Switch.interval(5);                  // sets debounce time
+    Green_Switch.interval(5);
+    Blue_Switch.interval(5);
+    Red_Switch.update();
+    Green_Switch.update();
+    Blue_Switch.update();
     digitalWrite(Running_led_pin, LOW);
     digitalWrite(SD_Active_led_pin, LOW);
     // WiFi and Web Setup -------------------------------------------------------------------------
@@ -274,17 +285,14 @@ void setup() {
     console_message = "Server Started";
     Write_Console_Message();
     server.on("/", Display);                        // nothing specified so display main web page
-    server.on("/Start", Start_Readings);            // start taking readings
     server.on("/Display", Display);                 // display the main web page
     server.on("/Statistics", Statistics);           // display statistics
     server.on("/DownloadFiles", Download_Files);    // select a file to download
     server.on("/GetFile", Download_File);           // download the selectedfile
     server.on("/DeleteFiles", Delete_Files);        // select a file to delete
     server.on("/DelFile", Del_File);                // delete the selected file
-    server.on("/AverageFiles", Average_Files);      // display hourly analysis of current file
-    server.on("/AverageFile", Average_File);        // analysis the selected file
     server.on("/Reset", Web_Reset);                 // reset the orocessor from the webpage
-    server.on("/DebugShow", Debug_Show);            // display the last 30 console messages on a webpage
+    server.on("/ConsoleShow", Console_Show);            // display the last 30 console messages on a webpage
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
@@ -295,7 +303,7 @@ void setup() {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
             delay(500);
-            Check_Reset_Switch();
+            Check_Red_Switch();
         }
     }
     else {
@@ -309,7 +317,7 @@ void setup() {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
                 delay(500);
-                Check_Reset_Switch();
+                Check_Red_Switch();
             }
         }
         String card;
@@ -348,8 +356,6 @@ void setup() {
     Write_Console_Message();
     console_message = "Running in Full Function Mode";
     Write_Console_Message();
-    console_message = "Press Start Button to commence readings";
-    Write_Console_Message();
     int count = 0;
     for (int x = 0; x <= 120; x++) {
         if (incomplete_weather_api_link[x] == '\0') break;
@@ -371,61 +377,61 @@ void setup() {
     Post_Setup_Status = true;
 }   // end of Setup
 void loop() {
-    Check_Reset_Switch();                                           // check if reset switch has been pressed
-    Check_Start_Switch();                                           // check if start switch has been pressed
-    Check_SD_Switch();                                              // check if wipesd switch has been pressed
-    Drive_Running_Led();                                            // on when started, flashing when not, flashing with SD led if waiting for reset
-    server.handleClient();                                          // handle any messages from the website
-    if (started) {                                                  // user has started the readings
+    Check_Red_Switch();                                     // check if reset switch has been pressed
+    Check_Green_Switch();                                   // check if start switch has been pressed
+    Check_Blue_Switch();                                    // check if wipesd switch has been pressed
+    Drive_Running_Led();                                    // on when started, flashing when not, flashing with SD led if waiting for reset
+    server.handleClient();                                  // handle any messages from the website
+    // if (started) {                                       // user has started the readings
         // Energy Information - every 5 seconds -------------------------------------------------------------------------------
-        if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
-            last_cycle = millis();                            // update the last read milli second reading
-            // weather start ------------------------------------------------------------------------------------------
-            HTTPClient http;
-            http.begin(complete_weather_api_link);                           // start the weather connectio
-            int httpCode = http.GET();                              // send the request
-            if (httpCode > 0) {
-                if (httpCode == HTTP_CODE_OK) {
-                    String payload = http.getString();
-                    Parse_Weather_Info(payload);
-                }
-                else {
-                    console_message = "Obtaining Weather Information Failed, Return code: " + String(httpCode);
-                    Write_Console_Message();
-                    weather_record.temp = 0;
-                    weather_record.temp_min = 0;
-                    weather_record.temp_max = 0;
-                    weather_record.temp_feel = 0;
-                    weather_record.pressure = 0;
-                    weather_record.humidity = 0;
-                    weather_record.wind_direction = 0;
-                    weather_record.wind_speed = 0;
-                    weather_record.weather = "";
-                }
-                http.end();
-            }
-            // weather end --------------------------------------------------------------------------------------------
-            // sensor start -------------------------------------------------------------------------------------------
-            for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
-                Send_Request(i);                                    // send the RS485 Port the requests, one by one
-                Data_Values[i] = Receive(i);                        // get the reply
-            }                                                       // all values should now be populated
-            // sensor end ---------------------------------------------------------------------------------------------
-            Data_Date = GetDate(true);                              // get the date of the reading
-            Data_Time = GetTime(true);                              // get the time of the reading
-            if (This_Date != GetDate(false) && New_Day_File_Required == true) {
-                Create_New_Data_File();                             // so create a new Data File with new file name
-                Create_New_Console_File();
-                Clear_Arrays();
-                New_Day_File_Required = false;
+    if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
+        last_cycle = millis();                            // update the last read milli second reading
+        // weather start ------------------------------------------------------------------------------------------
+        HTTPClient http;
+        http.begin(complete_weather_api_link);                           // start the weather connectio
+        int httpCode = http.GET();                              // send the request
+        if (httpCode > 0) {
+            if (httpCode == HTTP_CODE_OK) {
+                String payload = http.getString();
+                Parse_Weather_Info(payload);
             }
             else {
-                New_Day_File_Required = true;                       // reset the flag
+                console_message = "Obtaining Weather Information Failed, Return code: " + String(httpCode);
+                Write_Console_Message();
+                weather_record.temp = 0;
+                weather_record.temp_min = 0;
+                weather_record.temp_max = 0;
+                weather_record.temp_feel = 0;
+                weather_record.pressure = 0;
+                weather_record.humidity = 0;
+                weather_record.wind_direction = 0;
+                weather_record.wind_speed = 0;
+                weather_record.weather = "";
             }
-            Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
-            Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
-        }                                                           // end of if millis >5000
-    }                                                               // end of if started
+            http.end();
+        }
+        // weather end --------------------------------------------------------------------------------------------
+        // sensor start -------------------------------------------------------------------------------------------
+        for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
+            Send_Request(i);                                    // send the RS485 Port the requests, one by one
+            Data_Values[i] = Receive(i);                        // get the reply
+        }                                                       // all values should now be populated
+        // sensor end ---------------------------------------------------------------------------------------------
+        Data_Date = GetDate(true);                              // get the date of the reading
+        Data_Time = GetTime(true);                              // get the time of the reading
+        if (This_Date != GetDate(false) && New_Day_File_Required == true) {
+            Create_New_Data_File();                             // so create a new Data File with new file name
+            Create_New_Console_File();
+            Clear_Arrays();
+            New_Day_File_Required = false;
+        }
+        else {
+            New_Day_File_Required = true;                       // reset the flag
+        }
+        Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
+        Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
+    }                                                           // end of if millis >5000
+//}                                                               // end of if started
 }                                                                   // end of loop
 void Write_New_Data_Record_to_Data_File() {
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
@@ -437,7 +443,7 @@ void Write_New_Data_Record_to_Data_File() {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
             delay(500);
-            Check_Reset_Switch();                               // Reset will restart the processor so no return
+            Check_Red_Switch();                               // Reset will restart the processor so no return
         }
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
@@ -601,7 +607,7 @@ void Create_New_Console_File() {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
                 delay(500);
-                Check_Reset_Switch();
+                Check_Red_Switch();
             }
         }
         Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + milliseconds + ",Console File Started");
@@ -628,7 +634,7 @@ void Create_New_Data_File() {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
                 delay(500);
-                Check_Reset_Switch();
+                Check_Red_Switch();
             }
         }
         Datafile.print("Date,");                                    // write first column header
@@ -692,7 +698,7 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
             delay(500);
-            Check_Reset_Switch();                                   // Reset will restart the processor so no return
+            Check_Red_Switch();                                   // Reset will restart the processor so no return
         }
     }
     Consolefile.print(date);
@@ -758,7 +764,8 @@ int StartWiFi(const char* ssid, const char* password) {
     Write_Console_Message();
     WiFi.disconnect(true);                                      // disconnect to set new wifi connection
     WiFi.begin(ssid, password);                                 // connect to the wifi network
-    console_message = "WiFi Status: " + String(WiFi.status());  // display current status of WiFi
+    int WiFi_Status = WiFi.status();
+    console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
     Write_Console_Message();
     int wifi_connection_attempts = 0;                           // zero the attempt counter
     while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
@@ -771,7 +778,11 @@ int StartWiFi(const char* ssid, const char* password) {
             ESP.restart();
         }
     }
-    console_message = "Wifi Connected";
+    WiFi_Status = WiFi.status();
+    console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
+    Write_Console_Message();
+    WiFi_Signal_Strength = (int)WiFi.RSSI();
+    console_message = "WiFi Signal Strength:" + String(WiFi_Signal_Strength);
     Write_Console_Message();
     console_message = "WiFi IP Address: " + String(WiFi.localIP().toString().c_str());
     Write_Console_Message();
@@ -1033,13 +1044,6 @@ void Display() {
     webpage = "";
     lastcall = "display";
 }
-void Start_Readings() {
-    console_message = "Readings Started via Web Command";
-    Write_Console_Message();
-    started = true;
-    webpage = "";
-    Display();
-}
 void Web_Reset() {
     console_message = "Processor Reset via Web Command";
     Write_Console_Message();
@@ -1089,49 +1093,12 @@ void Page_Footer() {
     char signature[20] = { 0xA9,0x53,0x74,0x65,0x70,0x68,0x65,0x6E,0x20,0x47,0x6F,0x75,0x6C,0x64,0x20,0x32,0x30,0x32,0x32,0x00 };
     // <ul> start -----------------------------------------------------------------------------------------------------
     webpage += F("<ul>");
-    if (!started) {
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/Start' >Start Readings");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
-    else {
-        webpage += F("<li>");
-        webpage += F("<span ");
-        webpage += F("style='color:#e03e2d;'>");
-        webpage += F("<a ");
-        webpage += F("style='color:#e03e2d;");
-        webpage += F("'href='/Start'>");
-        webpage += F("<span ");
-        webpage += F("style='color:#000000;'>Start Readings");
-        webpage += F("</span>");
-        webpage += F("</a>");
-        webpage += F("</span>");
-        webpage += F("</li>");
-    }
     webpage += F("<li><a href='/Display'>Webpage</a> </li>");
     webpage += F("<li><a href='/Statistics'>Display Statistics</a></li>");
     webpage += F("<li><a href='/DownloadFiles'>Download Files</a></li>");
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
-    webpage += F("<li><a href='/AverageFiles'>Average Files</a></li>");
     webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
-    webpage += F("<li>");
-    webpage += F("<span ");
-    webpage += F("style='color:#e03e2d;'>");
-    webpage += F("<a ");
-    webpage += F("style='color:#e03e2d;");
-    webpage += F("'href='/DebugShow'>");
-    webpage += F("<span ");
-    webpage += F("style='color:#000000;'>Show Console");
-    webpage += F("</span>");
-    webpage += F("</a>");
-    webpage += F("</span>");
-    webpage += F("</li>");
+    webpage += F("<li><a href='/ConsoleShow'>Show Console</a></li>");
     // </ul> end ------------------------------------------------------------------------------------------------------
     webpage += F("</ul>");
     // <footer> start -------------------------------------------------------------------------------------------------
@@ -1144,7 +1111,9 @@ void Page_Footer() {
     webpage += F("style = 'color: red;'");
     webpage += F(">");
     webpage += String(signature);
-    webpage += F(" Last Page Update - ");
+    webpage += F(" (");
+    webpage += String(version);
+    webpage += F(") Last Page Update - ");
     webpage += GetTime(true);
     webpage += F(" SD Free Space = ");
     webpage += String(SD_freespace_double, 2) + " MB";
@@ -1161,25 +1130,15 @@ void Page_Footer() {
 }
 void Statistics() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    console_message = "Statistics Requested via Webpage";
-    Write_Console_Message();
-    if (!started) {
-        Datafile = SD.open("/" + DataFileName, FILE_APPEND);      // open the SD file
-        if (!Datafile) {                                                               // oops - file not available!
-            console_message = "Error re-opening Datafile: " + DataFileName;
-            Write_Console_Message();
-            while (true) {
-                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
-                delay(500);
-                Check_Reset_Switch();                                                   // Reset will restart the processor so no return
-            }
-        }
-        SD_freespace = (SD.totalBytes() - SD.usedBytes());
-    }
     webpage = ""; // don't delete this command, it ensures the server works reliably!
     Page_Header(true, "Energy Monitor Statistics");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
+    // Wifi Signal Strength -------------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F(">WiFi Signal Strength = ");
+    webpage += String(WiFi_Signal_Strength);
+    webpage += "</span></strong></p>";
     // Data File Size -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
@@ -1321,8 +1280,8 @@ void Statistics() {                                                 // Display f
     webpage += String(latest_wind_direction);
     webpage += F("&deg;");
     webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // ----------------------------------------------------------------------------------------------------------------
+    //   webpage += F("<p ");
+       // ----------------------------------------------------------------------------------------------------------------
     datafile.close();
     Page_Footer();
     server.send(200, "text/html", webpage);
@@ -1438,178 +1397,7 @@ void Del_File() {                                                       // web r
     server.send(200, "text/html", webpage);
     webpage = "";
 }
-void Average_Files() {
-    int file_extension = 0;
-    int file_count = Count_Files_on_SD_Drive();     // this counts and creates an array of file names on SD
-    webpage = "";
-    Page_Header(false, "Energy Monitor Plot Files");
-    for (i = 1; i < file_count; i++) {
-        file_extension = FileNames[i].indexOf("cvs");
-        if (file_extension > 0) {
-            webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-            webpage += "&nbsp;<a href=\"/AverageFile?file=" + String(FileNames[i]) + " " + "\">Analyse</a>";
-            webpage += "</h3>";
-        }
-    }
-    Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
-}
-void Average_File() {
-    String log_time;
-    log_time = "Time";
-    char temp;
-    int average_table_record_count = 0;
-    int records = 0;
-    char dataField[10];
-    int character_count = 0;
-    int fieldNo = 1;
-    double total_amperage = 0;
-    double average_amperage = 0;
-    char time[8];
-    int a_logging_count = 0;
-    digitalWrite(SD_Active_led_pin, HIGH);
-    //  1. find the number of records in the file ---------------------------------------------------------------------
-    String fileName = "        ";
-    fileName = server.arg("file");
-    console_message = "Plot of " + fileName + " Requested via Webpage";
-    Write_Console_Message();
-    record_count = 0;                                                 // miss the first record in the file - column titles
-    File dataFile = SD.open("/" + fileName, FILE_READ);
-    if (dataFile) {                                                    // if file successfully opened 
-        //       console_message = "Averaging data from " + fileName;
-        //       Write_Console_Message();
-        while (dataFile.available()) {                                 // throw the first row, column headers, away
-            temp = dataFile.read();
-            if (temp == '\n') break;
-        }
-        while (dataFile.available()) {                                 // count the lines in the file
-            temp = dataFile.read();
-            if (temp == '\n') {                                       // by counting the end of lines
-                record_count++;                                       // increment the count
-            }
-        }
-    }
-    dataFile.close();
-    //  2. calculate the number of rows per average -------------------------------------------------------------------
-    records = record_count / table_size;
-    record_count = 0;
-    // 3. Read the specified number of records and calculate average amperage -----------------------------------------
-    dataFile = SD.open("/" + fileName, FILE_READ);               // open the file again
-    if (dataFile) {
-        //        console.println(fileName);
-        while (dataFile.available()) {                           // throw the first row, column headers, away
-            temp = dataFile.read();
-            if (temp == '\n') break;
-        }
-        while (dataFile.available()) {                           // do while there are data available
-            temp = dataFile.read();                              // read next character into temp
-            dataField[character_count++] = temp;                 // add it to the csvfield string
-            if (temp == ',' || temp == '\n') {                  // look for end of field
-                dataField[character_count - 1] = '\0';           // insert termination character where the ',' or '\n' was
-                switch (fieldNo) {                              // process the field dependent on which fieldNo we are processing
-                case 1:                                         // field 1 is Date
-                    break;
-                case 2:                                         // field 2 is Time
-                    for (int x = 0; x < 8; x++) {
-                        time[x] = dataField[x];
-                    }
-                    break;
-                case 3:                                         // field 3 ignore
-                    break;
-                case 4:                                         // field 4 is Amperage 
-                    total_amperage += atof(dataField);           // accumulate to the total
-                    break;
-                case 5:                                         // field 5 ignore
-                case 6:
-                case 7:
-                case 8:
-                case 9:
-                case 10:
-                case 11:
-                    break;
-                default:
-                    break;
-                }
-                fieldNo++;                                      // increment the field number
-                dataField[0] = '\0';                             // clear the dataField
-                character_count = 0;                            // zero the character cout
-            }                                                   // finished processing this field
-            if (temp == '\n') {
-                record_count++;                                                   // increment records read count
-                a_logging_count++;
-                if (record_count == records) {                                    // create an average table record
-                    average_amperage = total_amperage / (double)records;
-                    for (int x = 0; x < 8; x++) {
-                        a_readings_table[average_table_record_count].ltime[x] = time[x];
-                    }
-                    a_readings_table[average_table_record_count].amperage = average_amperage;
-                    average_table_record_count++;                                   // increment the average table record count
-                    record_count = 0;
-                }
-                fieldNo = 1;                                                        // reset the field pointer
-            }
-        }   // end of while
-    } // end of file.available()
-    dataFile.close();
-    digitalWrite(SD_Active_led_pin, LOW);
-    //4. Generate web page
-    webpage = "";                           // don't delete this command, it ensures the server works reliably!
-    Page_Header(false, "Energy Plot of " + fileName);
-    // <script> -------------------------------------------------------------------------------------------------------
-    webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
-    webpage += F("<script type=\"text/javascript\">");
-    webpage += F("google.charts.load('current',{packages:['corechart','line']});");
-    webpage += F("google.setOnLoadCallback(drawChart);");
-    webpage += F("google.charts.load('current',{'packages':['bar']});");
-    webpage += F("google.charts.setOnLoadCallback(drawChart);");
-    webpage += F("function drawChart() {");
-    webpage += F("var data=new google.visualization.DataTable();");
-    webpage += F("data.addColumn('timeofday','Time');");
-    webpage += F("data.addColumn('number','Amperage');");
-    webpage += F("data.addRows([");
-    for (int i = 0; i < (average_table_record_count); i++) {
-        if (String(a_readings_table[i].ltime) != "") {                  // if the ltime field contains data
-            for (int y = 0; y < 8; y++) {                               // replace the ":"s in ltime with ","
-                if (a_readings_table[i].ltime[y] == ':') {
-                    a_readings_table[i].ltime[y] = ',';
-                }
-            }
-            webpage += "[[";
-            webpage += String(a_readings_table[i].ltime) + "],";
-            webpage += String(a_readings_table[i].amperage) + "]";
-            if (i != average_table_record_count) webpage += ",";    // do not add a "," to the last record
-        }
-    }
-    webpage += "]);\n";
-    webpage += F("var options={");
-    webpage += F("title:'Electrical Power Consumption',titleTextStyle:{fontName:'Arial',fontSize:20,color:'blue'},");
-    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'85%', height:'65%'},");
-    webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
-    webpage += F("gridlines:{color:'#333'},showTextEvery:1");
-    webpage += F(",title:'Time'");
-    webpage += F("},");
-    webpage += F("vAxes:");
-    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'},viewWindow:{min:0,max:100},scaleType:'lin',title:'Amperage (A)',format:'###'},");
-    webpage += F("}, ");
-    webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
-    webpage += F("var chart=new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data,options);");
-    webpage += F("}");
-    webpage += F("</script>");
-    // </script> ------------------------------------------------------------------------------------------------------
-    webpage += F("<div id='line_chart'style='width:960px;height:600px'></div>");
-    Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
-    lastcall = "display";
-    for (int x = 0; x < average_table_record_count; x++) {
-        for (int y = 0; y < 8; y++) {
-            a_readings_table[x].ltime[y] = 0;
-        }
-        a_readings_table[x].amperage = 0;
-    }
-}
-void Debug_Show() {
+void Console_Show() {
     console_message = "Web Display of Console Messages Requested via Webpage";
     Write_Console_Message();
     webpage = "";
@@ -1706,7 +1494,7 @@ double Receive(int field) {
                     digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                     digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
                     delay(500);
-                    Check_Reset_Switch();                                               // Reset will restart the processor so no return
+                    Check_Red_Switch();                                               // Reset will restart the processor so no return
                 }
             }
         }
@@ -1823,117 +1611,85 @@ double Receive(int field) {
     }
     return (double)0;
 }
-void Check_Start_Switch() {
-    Start.update();
-    if (Start.fell()) {
-        console_message = "Start Button Pressed";
+void Check_Green_Switch() {
+    Green_Switch.update();
+    if (Green_Switch.fell()) {
+        console_message = "Green Button Pressed - No Action Assigned";
         Write_Console_Message();
-        if (started) {
-            if (Datafile) {
-                Datafile.close();
-                Datafile.flush();
-            }
-            started = false;
-            console_message = "Standby Mode Started";
-            Write_Console_Message();
-        }
-        else {
-            started = true;
-            console_message = "Run Mode Started";
-            Write_Console_Message();
-        }
     }
 }
-void Check_SD_Switch() {
+void Check_Blue_Switch() {
     char Running_led_state = 0;
     char SD_led_state = 0;
-    SD_switch.update();                                                                // update wipe switch
-    if (SD_switch.fell()) {
-        console_message = "SD Button Pressed";
+    Blue_Switch.update();                                                   // update wipe switch
+    if (Blue_Switch.fell()) {
+        console_message = "Blue Button Pressed";
         Write_Console_Message();
-        Running_led_state = digitalRead(Running_led_pin);                           // save the current state of the leds
+        Running_led_state = digitalRead(Running_led_pin);                   // save the current state of the leds
         SD_led_state = digitalRead(SD_Active_led_pin);
-        if (!started) {                                                             // do not allow Wipe if logging started
-            do {
-                digitalWrite(Running_led_pin, HIGH);                                // turn the run led on
-                digitalWrite(SD_Active_led_pin, LOW);                               // turn the sd led off
-                Boot.update();
-                if (Boot.fell()) booted = true;                                     // WIPE + Boot = wipe directory
-                Reset.update();                                                     // reset will cancel the Wipe
-                if (Reset.fell()) {
-                    console_message = "Reset Button Pressed";
-                    Write_Console_Message();
-                    ESP.restart();
-                }
-                delay(150);
-                digitalWrite(Running_led_pin, LOW);                                 // turn the run led off
-                digitalWrite(SD_Active_led_pin, HIGH);                              // turn the sd led on
-                delay(150);
-            } while (!started);
-            if (booted) {
-                console_message = "Boot Button Pressed";
+        do {
+            digitalWrite(Running_led_pin, HIGH);                            // turn the run led on
+            digitalWrite(SD_Active_led_pin, LOW);                           // turn the sd led off
+            Yellow_Switch.update();
+            if (Yellow_Switch.fell()) Yellow_Switch_Pressed = true;         // Blue switch + Yellow switch = wipe directory
+            Red_Switch.update();                                            // reset will cancel the Wipe
+            if (Red_Switch.fell()) {
+                console_message = "Red Button Pressed";
                 Write_Console_Message();
-                digitalWrite(SD_Active_led_pin, HIGH);
-                console_message = "Wiping Files";
-                Write_Console_Message();
-                Wipe_Files();                                                       // delete all files on the SD, Rebooted when compete
+                ESP.restart();
             }
-            digitalWrite(Running_led_pin, Running_led_state);                       // restore the previous state of the leds
-            digitalWrite(SD_Active_led_pin, SD_led_state);
+            delay(150);
+            digitalWrite(Running_led_pin, LOW);                             // turn the run led off
+            digitalWrite(SD_Active_led_pin, HIGH);                          // turn the sd led on
+            delay(150);
+        } while (!Yellow_Switch_Pressed);
+        if (Yellow_Switch_Pressed) {
+            console_message = "Yellow Button Pressed";
+            Write_Console_Message();
+            digitalWrite(SD_Active_led_pin, HIGH);
+            console_message = "Wiping Files";
+            Write_Console_Message();
+            Wipe_Files();                                                   // delete all files on the SD, ReYellow_Switch_Pressed when compete
         }
+        digitalWrite(Running_led_pin, Running_led_state);                   // restore the previous state of the leds
+        digitalWrite(SD_Active_led_pin, SD_led_state);
     }
 }
 void Drive_Running_Led() {
-    if (started) {
-        digitalWrite(Running_led_pin, HIGH);
-    }
-    else {
-        digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
-        delay(500);
-    }
+    digitalWrite(Running_led_pin, HIGH);
 }
-void Check_Reset_Switch() {
-    Reset.update();
-    if (Reset.fell()) {
-        console_message = "Reset Button Pressed";
+void Check_Red_Switch() {
+    Red_Switch.update();
+    if (Red_Switch.fell()) {
+        console_message = "Red Button Pressed";
         Write_Console_Message();
         ESP.restart();
     }
 }
-void Check_Boot_Switch() {
-    Boot.update();
-    if (Boot.fell()) {
-        console_message = "Boot Button Pressed";
+void Check_Yellow_Switch() {
+    Yellow_Switch.update();
+    if (Yellow_Switch.fell()) {
+        console_message = "Yellow Button Pressed";
         Write_Console_Message();
-        booted = true;
+        Yellow_Switch_Pressed = true;
     }
-    if (Boot.rose()) {
-        console_message = "Boot Button Released";
+    if (Yellow_Switch.rose()) {
+        console_message = "Yellow Button Released";
         Write_Console_Message();
-        booted = false;
+        Yellow_Switch_Pressed = false;
     }
     return;
 }
 void Clear_Arrays() {                                           // clear the web arrays of old records
     for (int x = 0; x < console_table_size; x++) {
-        for (int y = 0; y < 10; y++) {
-            console_table[x].ldate[y] = '0';
-        }
-        for (int y = 0; y < 8; y++) {
-            console_table[x].ltime[y] = '0';
-        }
-        for (int y = 0; y < 100; y++) {
-            console_table[x].message[y] = '0';
-        }
+        console_table[x].ldate[0] = '0';
+        console_table[x].ltime[0] = '0';
+        console_table[x].message[0] = '0';
         console_table[x].milliseconds = 0;
     }
     for (int x = 0; x < table_size; x++) {
-        for (int y = 0; y < 10; y++) {
-            readings_table[x].ldate[x] = '0';
-        }
-        for (int y = 0; y < 8; y++) {
-            readings_table[x].ltime[y] = '0';
-        }
+        readings_table[x].ldate[0] = '0';
+        readings_table[x].ltime[0] = '0';
         readings_table[x].amperage = 0;
         readings_table[x].frequency = 0;
         readings_table[x].kilowatthour = 0;
