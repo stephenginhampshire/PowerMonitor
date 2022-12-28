@@ -1027,7 +1027,7 @@ void Display() {
     webpage += F("title:'Electrical Power Consumption',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'blue'},");
     webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'85%', height:'65%'},");
     webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
-    webpage += F("gridlines:{color:'#333'},showTextEvery:1");
+    webpage += F("gridlines:{color:'#333'},showTextEvery:1,title:'");
     webpage += F(",title:'Time'");
     webpage += F("},");
     webpage += F("vAxes:");
