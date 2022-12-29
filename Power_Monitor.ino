@@ -15,8 +15,9 @@ Change Record
 20/12/2022  9.7 Corrected an issue where if the date changed new file creation would be continuously repeated
 22/12/2022  9.8 Web data arrays cleared when date changed, SD flashes during Preloading
 23/12/2022  9.9 Requirement to press start button removed
+28/12/2022  9.10 Attempt to recover network if lost (up to 20 attempts = 10 seconds
 */
-String version = "V9.9";                // software version number, shown on webpage
+String version = "V9.10";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -164,7 +165,7 @@ double Data_Values[9] = {
                         0.0,            // degC
 };
 bool Yellow_Switch_Pressed = false;
-String site_width = "1060";                             // width of web page
+String site_width = "1060"; // "1060";                             // width of web page
 String site_height = "600";                             // height of web page
 int const table_size = 72;
 constexpr int console_table_size = 20;                  // number of lines to display on debug web page
@@ -172,6 +173,7 @@ int       record_count, current_data_record_count, console_record_count, current
 String    webpage, lastcall;
 double temperature_calibration = (double)16.5 / (double)22.0;   // temperature reading = 22, actual temperature = 16.5
 String Last_Boot_Time = "12:12:12";
+String Last_Boot_Date = "2022/29/12";
 typedef struct {
     char ldate[11];     // date record was taken
     char ltime[9];      // time record was taken
@@ -292,7 +294,7 @@ void setup() {
     server.on("/DeleteFiles", Delete_Files);        // select a file to delete
     server.on("/DelFile", Del_File);                // delete the selected file
     server.on("/Reset", Web_Reset);                 // reset the orocessor from the webpage
-    server.on("/ConsoleShow", Console_Show);            // display the last 30 console messages on a webpage
+    server.on("/ConsoleShow", Console_Show);        // display the last 30 console messages on a webpage
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
@@ -349,6 +351,7 @@ void setup() {
         Write_Console_Message();
     }
     Last_Boot_Time = GetTime(true);
+    Last_Boot_Date = GetDate(true);
     This_Date = GetDate(false);
     Create_New_Data_File();
     Create_New_Console_File();
@@ -377,6 +380,7 @@ void setup() {
     Post_Setup_Status = true;
 }   // end of Setup
 void loop() {
+    Check_WiFi();
     Check_Red_Switch();                                     // check if reset switch has been pressed
     Check_Green_Switch();                                   // check if start switch has been pressed
     Check_Blue_Switch();                                    // check if wipesd switch has been pressed
@@ -668,6 +672,8 @@ void Write_Console_Message() {
     if (Post_Setup_Status) {                                                // only write the console message to disk once setup is complete
         if (pre_loop_message_count > 0) {                                   // are there any pre loop console messages stored
             for (int x = 0; x < pre_loop_message_count; x++) {
+                pre_date = GetDate(true);
+                pre_time = GetTime(true);
                 console_message = pre_loop_messages[x];
                 Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_millis_values[x]);
                 Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_millis_values[x]);
@@ -758,6 +764,22 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned
         }
     }
     console_record_count++;                                                     // increment the console record count
+}
+void Check_WiFi() {
+    while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
+        int wifi_connection_attempts = 0;
+        delay(500);
+        console_message = "Connection attempt " + String(wifi_connection_attempts);
+        Write_Console_Message();
+        if (wifi_connection_attempts++ > 20) {
+            int WiFi_Status = WiFi.status();
+            console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
+            Write_Console_Message();
+            console_message = "Network Error, Restarting";
+            Write_Console_Message();
+            ESP.restart();
+        }
+    }
 }
 int StartWiFi(const char* ssid, const char* password) {
     console_message = "WiFi Connecting to " + String(ssid);
@@ -993,10 +1015,8 @@ void Prefill_Console_Array() {
     SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
-    String log_time;
-    log_time = "Time";
     webpage = "";                           // don't delete this command, it ensures the server works reliably!
-    Page_Header(true, "Energy Useage Monitor");
+    Page_Header(true, "Energy Usage Monitor");
     // <script> -------------------------------------------------------------------------------------------------------
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
     webpage += F("<script type=\"text/javascript\">");
@@ -1024,14 +1044,14 @@ void Display() {
     }
     webpage += "]);\n";
     webpage += F("var options = {");
-    webpage += F("title:'Electrical Power Consumption',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'blue'},");
-    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'85%', height:'65%'},");
+    webpage += F("title:'Electrical Power Consumption',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'Maroon'},");
+    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'90%', height:'60%'},");
     webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
-    webpage += F("gridlines:{color:'#333'},showTextEvery:1,title:'");
-    webpage += F(",title:'Time'");
+    webpage += F("gridlines:{color:'#333'},showTextEvery:1");
+    //   webpage += F(",title:'Time'");
     webpage += F("},");
     webpage += F("vAxes:");
-    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{min:0,max:50000},scaleType: 'log',title:'Amperage (mA)',format:'#####'},");
+    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{min:0,max:10000},scaleType: 'log',title:'Amperage (mA)',format:'#####'},");
     webpage += F("}, ");
     webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
     webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data, options);");
@@ -1066,22 +1086,27 @@ void Page_Header(bool refresh, String Header) {
     webpage += F("<h1 ");                                                                   // start of h1
     webpage += F("style='text-align:center;'>");
     // <span start ----------------------------------------------------------------------------------------------------
-    webpage += F("<span style='color:red; font-size:36pt;'>");                              // start of span
+    // colour of header tile letters
+    webpage += F("<span style='color:DodgerBlue; font-size:36pt;'>");                              // start of span
     webpage += Header;
     // </span> end ----------------------------------------------------------------------------------------------------
     webpage += F("</span>");                                                                // end of span
-    webpage += F("<span style='font-size: medium;'><align left=''></align></span>");
+    webpage += F("<span style='font-size: medium;'><align center=''></align></span>");
     // <h1> end -------------------------------------------------------------------------------------------------------
     webpage += F("</h1>");                                                                  // end of h1
     // </style> -------------------------------------------------------------------------------------------------------
+    //                                                                                               #31c1f9
+    // background colour for footer row
     webpage += F("<style>ul{list-style-type:none;margin:0;padding:0;overflow:hidden;background-color:#31c1f9;font-size:14px;}");
     webpage += F("li{float:left;}");
     webpage += F("li a{display:block;text-align:center;padding:5px 25px;text-decoration:none;}");
     webpage += F("li a:hover{background-color:#FFFFFF;}");
-    webpage += F("h1{background-color:#31c1f9;}");
+    //                                #31c1f9
+    webpage += F("h1{background-color:White;}");
     webpage += F("body{width:");
     webpage += site_width;
-    webpage += F("px;margin:0 auto;font-family:arial;font-size:14px;text-align:center;color:#ed6495;background-color:#F7F2Fd;}");
+    webpage += F("px;margin:0 auto;font-family:arial;font-size:14px;text-align:center;");
+    webpage += F("color:#ed6495;background-color:#F7F2Fd;}");
     // </style> end ---------------------------------------------------------------------------------------------------
     webpage += F("</style>");                                                               // end of style section
     // </head> end ----------------------------------------------------------------------------------------------------
@@ -1137,7 +1162,7 @@ void Statistics() {                                                 // Display f
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F(">WiFi Signal Strength = ");
-    webpage += String(WiFi_Signal_Strength);
+    webpage += String(WiFi_Signal_Strength) + " Dbm";
     webpage += "</span></strong></p>";
     // Data File Size -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
@@ -1180,8 +1205,8 @@ void Statistics() {                                                 // Display f
     // Last Boot Time -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Time the System was Booted : ");
-    webpage += Last_Boot_Time;
+    webpage += F("'>Date the System was Booted : ");
+    webpage += Last_Boot_Date + " at " + Last_Boot_Time;
     webpage += "</span></strong></p>";
     // ----------------------------------------------------------------------------------------------------------------
     webpage += F("<p ");
