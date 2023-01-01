@@ -10,14 +10,15 @@ Change Record
 10/12/2022  9.2 Webpage Reset function added
 11/12/2022  9.3 SD saving and Webpage viewing of console messages added
 14/12/2022  9.4 Added weather information to data file
-16/12/2022  9.5 Add more statistics to statistics page
+16/12/2022  9.5 Add more information to information web page
 17/12/2022  9.6 Corrected issue with Delete Files, where operational files were displayed after file removed
 20/12/2022  9.7 Corrected an issue where if the date changed new file creation would be continuously repeated
 22/12/2022  9.8 Web data arrays cleared when date changed, SD flashes during Preloading
 23/12/2022  9.9 Requirement to press start button removed
 28/12/2022  9.10 Attempt to recover network if lost (up to 20 attempts = 10 seconds
+30/12/2022  9.11 Added autoscaling to web chart display
 */
-String version = "V9.10";                // software version number, shown on webpage
+String version = "V9.11";                // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
 //#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
@@ -288,7 +289,7 @@ void setup() {
     Write_Console_Message();
     server.on("/", Display);                        // nothing specified so display main web page
     server.on("/Display", Display);                 // display the main web page
-    server.on("/Statistics", Statistics);           // display statistics
+    server.on("/Information", Information);         // display information
     server.on("/DownloadFiles", Download_Files);    // select a file to download
     server.on("/GetFile", Download_File);           // download the selectedfile
     server.on("/DeleteFiles", Delete_Files);        // select a file to delete
@@ -766,19 +767,9 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned
     console_record_count++;                                                     // increment the console record count
 }
 void Check_WiFi() {
-    while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
-        int wifi_connection_attempts = 0;
+    if (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
         delay(500);
-        console_message = "Connection attempt " + String(wifi_connection_attempts);
-        Write_Console_Message();
-        if (wifi_connection_attempts++ > 20) {
-            int WiFi_Status = WiFi.status();
-            console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
-            Write_Console_Message();
-            console_message = "Network Error, Restarting";
-            Write_Console_Message();
-            ESP.restart();
-        }
+        StartWiFi(ssid, password);
     }
 }
 int StartWiFi(const char* ssid, const char* password) {
@@ -1015,7 +1006,10 @@ void Prefill_Console_Array() {
     SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
-    webpage = "";                           // don't delete this command, it ensures the server works reliably!
+    webpage = "";
+    double maximum_amperage = 0;
+    double minimum_amperage = 0;
+    double this_amperage = 0;
     Page_Header(true, "Energy Usage Monitor");
     // <script> -------------------------------------------------------------------------------------------------------
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
@@ -1038,20 +1032,42 @@ void Display() {
             }
             webpage += "[[";
             webpage += String(readings_table[i].ltime) + "],";
-            webpage += String(readings_table[i].amperage * 1000, 1) + "]";
+            webpage += String(readings_table[i].amperage, 1) + "]";
+            this_amperage = readings_table[i].amperage;
+            if (this_amperage > maximum_amperage) maximum_amperage = this_amperage;
+            if (this_amperage < minimum_amperage) minimum_amperage = this_amperage;
             if (i != record_count) webpage += ",";    // do not add a "," to the last record
         }
     }
     webpage += "]);\n";
     webpage += F("var options = {");
-    webpage += F("title:'Electrical Power Consumption',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'Maroon'},");
-    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'90%', height:'60%'},");
+    webpage += F("title:'Electrical Power Consumption");
+    if (maximum_amperage < 1.0) {
+        webpage += " (linear scale)";
+    }
+    else {
+        webpage += " (logarithmic scale)";
+    }
+    webpage += F("',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'DodgerBlue'},");
+    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'90%', height:'80%'},");
     webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
     webpage += F("gridlines:{color:'#333'},showTextEvery:1");
-    //   webpage += F(",title:'Time'");
     webpage += F("},");
     webpage += F("vAxes:");
-    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{min:0,max:10000},scaleType: 'log',title:'Amperage (mA)',format:'#####'},");
+    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{");
+    webpage += F("min:");
+    webpage += String(minimum_amperage, 1);
+    webpage += F(",max:");
+    webpage += String(maximum_amperage, 1);
+    webpage += F("}, ");
+    webpage += F("scaleType: '");
+    if (maximum_amperage < 1.0) {
+        webpage += "lin";
+    }
+    else {
+        webpage += "log";
+    }
+    webpage += F("', title : 'Amperage(A)', format : '##.####'}, ");
     webpage += F("}, ");
     webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
     webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data, options);");
@@ -1119,7 +1135,7 @@ void Page_Footer() {
     // <ul> start -----------------------------------------------------------------------------------------------------
     webpage += F("<ul>");
     webpage += F("<li><a href='/Display'>Webpage</a> </li>");
-    webpage += F("<li><a href='/Statistics'>Display Statistics</a></li>");
+    webpage += F("<li><a href='/Information'>Display Information</a></li>");
     webpage += F("<li><a href='/DownloadFiles'>Download Files</a></li>");
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
     webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
@@ -1153,10 +1169,10 @@ void Page_Footer() {
     // </html> end ----------------------------------------------------------------------------------------------------
     webpage += F("</html>");
 }
-void Statistics() {                                                 // Display file size of the datalog file
+void Information() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
     webpage = ""; // don't delete this command, it ensures the server works reliably!
-    Page_Header(true, "Energy Monitor Statistics");
+    Page_Header(true, "Energy Monitor Information");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
     // Wifi Signal Strength -------------------------------------------------------------------------------------------
     webpage += F("<p ");
@@ -1235,7 +1251,7 @@ void Statistics() {                                                 // Display f
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Greatest Amperage was Recorded at ");
     webpage += String(time_of_largest_amperage) + " : ";
-    webpage += String(largest_amperage) + " ma";
+    webpage += String(largest_amperage) + " A";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Latest Temperature -------------------------------------------------------------------------------------
