@@ -1042,12 +1042,7 @@ void Display() {
     webpage += "]);\n";
     webpage += F("var options = {");
     webpage += F("title:'Electrical Power Consumption");
-    if (maximum_amperage < 1.0) {
-        webpage += " (linear scale)";
-    }
-    else {
-        webpage += " (logarithmic scale)";
-    }
+    webpage += " (logarithmic scale)";
     webpage += F("',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'DodgerBlue'},");
     webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'90%', height:'80%'},");
     webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
@@ -1061,12 +1056,7 @@ void Display() {
     webpage += String(maximum_amperage, 1);
     webpage += F("}, ");
     webpage += F("scaleType: '");
-    if (maximum_amperage < 1.0) {
-        webpage += "lin";
-    }
-    else {
-        webpage += "log";
-    }
+    webpage += "log";
     webpage += F("', title : 'Amperage(A)', format : '##.####'}, ");
     webpage += F("}, ");
     webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
