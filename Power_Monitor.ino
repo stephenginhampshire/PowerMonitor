@@ -665,8 +665,8 @@ void Create_New_Data_File() {
 }
 void Write_Console_Message() {
     String saved_console_message = console_message;
-    String Date;
-    String Time;
+    String Date = "1951/18/11";
+    String Time = "00:00:00";
     unsigned long milliseconds = millis();
     String pre_date = "1951/18/11";
     String pre_time = "00:00:00";
@@ -768,6 +768,8 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned
 }
 void Check_WiFi() {
     if (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
+        console_message = "WiFi Connection Failed, Attempting to Reconnect";
+        Write_Console_Message();
         delay(500);
         StartWiFi(ssid, password);
     }
