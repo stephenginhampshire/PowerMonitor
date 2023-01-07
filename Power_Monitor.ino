@@ -775,7 +775,6 @@ void Prefill_Array() {
     int datafieldNo = 1;
     char datatemp;
     int prefill_Data_Table_Pointer = 0;
-    Global_Data_Record_Count = 0;                                              // global index of next table entry
     Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
     Write_Console_Message("Loading datafile from " + String(DataFileName));
@@ -1029,7 +1028,6 @@ void Prefill_Console_Array() {
     int console_fieldNo = 1;
     char console_temp;
     Global_Data_Table_Pointer = 0;
-    Global_Data_Record_Count = 0;
     SD_Led_Flash_Start_Stop(true);
     File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
     if (consoleFile) {
@@ -1291,9 +1289,10 @@ void Information() {                                                 // Display 
     // Data Record Count ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Number of Data readings = ");
+    webpage += F("'>Number of Data Readings: ");
     webpage += String(Global_Data_Record_Count);
-    webpage += F(" ");
+    webpage += F(", Number of Console Entries: ");
+    webpage += String(Global_Console_Record_Count);
     webpage += "</span></strong></p>";
     // Highest Voltage ------------------------------------------------------------------------------------------------
     webpage += F("<p ");
