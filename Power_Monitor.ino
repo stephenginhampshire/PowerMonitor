@@ -17,11 +17,13 @@ Change Record
 23/12/2022  9.9 Requirement to press start button removed
 28/12/2022  9.10 Attempt to recover network if lost (up to 20 attempts = 10 seconds
 30/12/2022  9.11 Added autoscaling to web chart display
+06/01/2023  10.0 Radical rewrite of Data handling
 */
-String version = "V9.11";                // software version number, shown on webpage
+String version = "V10.0";                       // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
-//#define ALLOW_WORKING_FILE_DELETION         // allows the user to chose to delete the day's working files
-//#define DISPLAY_WEATHER_INFORMATION         // print the raw and parsed weather information
+//#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
+//#define DISPLAY_DATA_VALUES_COLLECTED         // print the data values as they are collected
+//#define DISPLAY_DATA_VALUES_WRITTEN           // print the data values as they written to sd drive
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -97,15 +99,25 @@ HTTPClient http;
 File Datafile;                         // Full data file, holds all readings from KWS-AC301L
 File Consolefile;
 // --------------------------------------------------------------------------------------------------------------------
-constexpr int Voltage = 0;
-constexpr int Amperage = 1;
-constexpr int Wattage = 2;
-constexpr int UpTime = 3;
-constexpr int Kilowatthour = 4;
-constexpr int PowerFactor = 5;
-constexpr int Unknown = 6;
-constexpr int Frequency = 7;
-constexpr int Temperature = 8;
+constexpr int Voltage = 2;
+constexpr int Amperage = 3;
+constexpr int Wattage = 4;
+constexpr int UpTime = 5;
+constexpr int Kilowatthour = 6;
+constexpr int PowerFactor = 7;
+constexpr int Unknown = 8;
+constexpr int Frequency = 9;
+constexpr int Sensor_Temperature = 10;
+constexpr int Weather_Temperature = 11;
+constexpr int Temperature_Feels_Like = 12;
+constexpr int Temperature_Maximum = 13;
+constexpr int Temperature_Minimum = 14;
+constexpr int Atmospheric_Pressure = 15;
+constexpr int Relative_Humidity = 16;
+constexpr int Wind_Speed = 17;
+constexpr int Wind_Direction = 18;
+constexpr int Weather_Description = 19;
+// --------------------------------------------------------------------------------------------------------------------
 constexpr bool receive = 0;
 constexpr bool transmit = 1;
 /*
@@ -134,71 +146,127 @@ byte RS485_Requests[9][8] = {
 char print_buffer[80];
 String DataFileName = "20220101";
 String ConsoleFileName = "20220101";
-String RS485_FieldNames[15] = {
-                        "Volts",                    // [0]
-                        "Amps",                     // [1]
-                        "Watts",                    // [2]
-                        "Up Time",                  // [3]
-                        "kWh",                      // [4]
-                        "Power Factor",             // [5]
-                        "Unknown",                  // [6]
-                        "Hz",                       // [7]
-                        "degC",                     // [8]
-                        "Temperature",              // [9]
-                        "Pressure",                 // [10]
-                        "Humidity",                 // [11]
-                        "Wind Direction",           // [12]
-                        "Wind Speed",               // [13]
-                        "Weather"                   // [14]
+String Data_File_Field_Names[20] = {
+                        "Date",                     // [0]
+                        "Time",                     // [1]
+                        "Voltage",                  // [2]
+                        "Amperage",                 // [3]
+                        "Wattage",                  // [4]
+                        "Up Time",                  // [5]
+                        "kiloWattHours",            // [6]
+                        "Power Factor",             // [7]
+                        "Unknown",                  // [8]
+                        "Frequency",                // [9]
+                        "Sensor Temperature",       // [10]
+                        "Weather Temperature",      // [11]
+                        "Temperature_Feels_Like",   // [12]
+                        "Temperature Maximum",      // [13]
+                        "Temperature Minimum",      // [14]
+                        "Atmospheric Pressure",     // [15]
+                        "Relative Humidity",        // [16]
+                        "Wind Speed",               // [17]
+                        "Wind Direction",           // [18]
+                        "Weather Description"       // [19]
 };
 String FileNames[50];
-String Data_Date;
-String Data_Time;
-double Data_Values[9] = {
-                        0.0,            // volts
-                        0.0,            // amps
-                        0.0,            // watts
-                        0.0,            // up time
-                        0.0,            // kWh
-                        0.0,            // power factor
-                        0.0,            // ?
-                        0.0,            // Hz
-                        0.0,            // degC
+String Data_File_Values_0 = "1951/11/18";       // Date
+String Data_File_Values_1 = "00:00:00";         // Time;
+double Data_File_Values[20] = {
+                        0.0,            // [0]  dummy date 
+                        0.0,            // [1]  dummy time
+                        0.0,            // [2]  voltage
+                        0.0,            // [3]  amperage
+                        0.0,            // [4]  wattage
+                        0.0,            // [5]  up time
+                        0.0,            // [6]  kilowatthours
+                        0.0,            // [7]  power factor
+                        0.0,            // [8]  unknown
+                        0.0,            // [9]  frequency
+                        0.0,            // [10] sensor temperature
+                        0.0,            // [11] weather temperature
+                        0.0,            // [12] temperature feels like
+                        0.0,            // [13] temperature Maximum
+                        0.0,            // [14] temperature Minimum
+                        0.0,            // [15] atmospheric pressure
+                        0.0,            // [16] relative humidity
+                        0.0,            // [17] wind speed
+                        0.0,            // [18] wind direction
+                        0.0             // [19] weather description
 };
+String Data_File_Values_19 = "                                   ";
 bool Yellow_Switch_Pressed = false;
-String site_width = "1060"; // "1060";                             // width of web page
-String site_height = "600";                             // height of web page
-int const table_size = 72;
-constexpr int console_table_size = 20;                  // number of lines to display on debug web page
-int       record_count, current_data_record_count, console_record_count, current_console_record_count;
-String    webpage, lastcall;
+String site_width = "1060"; // "1060";          // width of web page
+String site_height = "600";                     // height of web page
+constexpr int data_table_size = 59;             // number of data table rows (5 minutes worth)
+constexpr int console_table_size = 19;          // number of lines to display on debug web page
+int Global_Data_Table_Pointer = 0;              // points to the next index of Data_Table
+int Global_Data_Record_Count = 0;               // running total of records written to Data Table
+int Global_Console_Table_Pointer = 0;           // points to the next index of Console Table
+int Global_Console_Record_Count = 0;            // running total of records writtem tp Console Table
+String webpage;
+String lastcall;
 double temperature_calibration = (double)16.5 / (double)22.0;   // temperature reading = 22, actual temperature = 16.5
 String Last_Boot_Time = "12:12:12";
 String Last_Boot_Date = "2022/29/12";
 typedef struct {
-    char ldate[11];     // date record was taken
-    char ltime[9];      // time record was taken
-    double voltage;
-    double amperage;
-    double wattage;
-    double uptime;
-    double kilowatthour;
-    double powerfactor;
-    double unknown;                                 // always the same value
-    double frequency;
-    double temperature;
+    char ldate[11];                 // [0]  date record was taken
+    char ltime[9];                  // [1]  time record was taken
+    double voltage;                 // [2]
+    double amperage;                // [3]
+    double wattage;                 // [4]
+    double uptime;                  // [5]
+    double kilowatthour;            // [6]
+    double powerfactor;             // [7]
+    double unknown;                 // [8]  always the same value
+    double frequency;               // [9]
+    double sensor_temperature;      // [10]
+    double weather_temperature;     // [11]
+    double temperature_feels_like;  // [12]
+    double temperature_maximum;     // [13]
+    double temperature_minimum;     // [14]
+    double atmospheric_pressure;    // [15]
+    double relative_humidity;       // [16]
+    double wind_speed;              // [17]
+    double wind_direction;          // [18]
+    char weather_description[20];   // [19]
 } record_type;
-record_type readings_table[table_size + 1];
+record_type readings_table[data_table_size + 1];
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double lowest_voltage = 0;
 String time_of_lowest_voltage = "00:00:00";
 // Highest Voltage ----------------------------------------------------------------------------------------------------
 double highest_voltage = 0;
 String time_of_highest_voltage = "00:00:00";
-// Highest amperage -----------------------------------------------------------------------------------------------------
+// Highest amperage ---------------------------------------------------------------------------------------------------
 double highest_amperage = 0;
 String time_of_highest_amperage = "00:00:00";
-// Highest frequency --------------------------------------------------------------------------------------------------
+// Lowest Temperature -------------------------------------------------------------------------------------------------
+double lowest_temperature = 0;
+String time_of_lowest_temperature = "00:00:00";
+// Highest Temperature ------------------------------------------------------------------------------------------------
+double highest_temperature = 0;
+String time_of_highest_temperature = "00:00:00";
+// Time of Latest Weather Reading -------------------------------------------------------------------------------------
+String time_of_latest_reading = "00:00:00";
+// Latest Weather Temperature -----------------------------------------------------------------------------------------
+double latest_weather_temperature = 0;
+// Latest Temperature Feels Like --------------------------------------------------------------------------------------
+double latest_weather_temperature_feels_like = 0;
+// Latest Temperature Maximum -----------------------------------------------------------------------------------------
+double latest_weather_temperature_maximum = 0;
+// Latest Temperature Minimum -----------------------------------------------------------------------------------------
+double latest_weather_temperature_minimum = 0;
+// Latest Atmospheric Pressure ----------------------------------------------------------------------------------------
+double latest_atmospheric_pressure = 0;
+// Latest Relative Humidity -------------------------------------------------------------------------------------------
+double latest_relative_humidity = 0;
+// Latest Wind Speed --------------------------------------------------------------------------------------------------
+double latest_wind_speed = 0;
+// Latest Wind Direction ----------------------------------------------------------------------------------------------
+double latest_wind_direction = 0;
+// Latest Weather Description -----------------------------------------------------------------------------------------
+String latest_weather_description = "                                     ";
+// --------------------------------------------------------------------------------------------------------------------
 typedef struct {
     char ldate[11];         // date the message was taken
     char ltime[9];          // the time the message was taken
@@ -218,31 +286,13 @@ typedef struct {
     String weather;
 } weather_record_type;
 weather_record_type weather_record;
-double lowest_temperature = 0;
-String time_of_lowest_temperature = "00:00:00";
-double highest_temperature = 0;
-String time_of_highest_temperature = "00:00:00";
-double latest_temperature = 0;
-String time_of_latest_temperature = "00:00:00";
-int latest_pressure = 0;
-String time_of_latest_pressure = "00:00:00";
-int latest_humidity = 0;
-String time_of_latest_humidity = "00:00:00";
-String latest_weather = "                                     ";
-String time_of_latest_weather = "00:00:00";
-double largest_amperage = 0;
-String time_of_largest_amperage = "00:00:00";
-double latest_wind_speed = 0;
-String time_of_latest_wind_speed = "00:00:00";
-int latest_wind_direction = 0;
-String time_of_latest_wind_direction = "00:00:00";
 unsigned long last_cycle = 0;
 unsigned long last_weather_read = 0;
 uint64_t SD_freespace = 0;
 uint64_t critical_SD_freespace = 0;
 double SD_freespace_double = 0;
 String temp_message;
-String console_message = "                                                                    ";
+//String console_message = "                                                                    ";
 bool Post_Setup_Status = false;
 char complete_weather_api_link[120];
 int i = 0;
@@ -259,8 +309,7 @@ void setup() {
     console.begin(console_Baudrate);                                            // enable the console
     while (!console);                                                           // wait for port to settle
     delay(4000);
-    console_message = "Booting - Commencing Setup";
-    Write_Console_Message();
+    Write_Console_Message("Booting - Commencing Setup");
     pinMode(SD_Active_led_pin, OUTPUT);
     pinMode(Green_Switch_pin, INPUT_PULLUP);
     pinMode(Red_Switch_pin, INPUT_PULLUP);
@@ -282,11 +331,9 @@ void setup() {
     // WiFi and Web Setup -------------------------------------------------------------------------
     StartWiFi(ssid, password);                      // Start WiFi
     StartTime();                                    // Start Time
-    console_message = "Starting Server";
-    Write_Console_Message();
+    Write_Console_Message("Starting Server");
     server.begin();                                 // Start Webserver
-    console_message = "Server Started";
-    Write_Console_Message();
+    Write_Console_Message("Server Started");
     server.on("/", Display);                        // nothing specified so display main web page
     server.on("/Display", Display);                 // display the main web page
     server.on("/Information", Information);         // display information
@@ -300,8 +347,7 @@ void setup() {
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
     if (!SD.begin(SS_pin)) {
-        console_message = "SD Drive Begin Failed @ line 232";
-        Write_Console_Message();
+        Write_Console_Message("SD Drive Begin Failed");
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -310,12 +356,10 @@ void setup() {
         }
     }
     else {
-        console_message = "SD Drive Begin Succeeded";
-        Write_Console_Message();
+        Write_Console_Message("SD Drive Begin Succeeded");
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
-            console_message = "No SD Card Found @ line 246";
-            Write_Console_Message();
+            Write_Console_Message("No SD Card Found");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -336,30 +380,22 @@ void setup() {
         else {
             card = "UNKNOWN";
         }
-        console_message = "SD Card Type: " + card;
-        Write_Console_Message();
+        Write_Console_Message("SD Card Type: " + card);
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
         critical_SD_freespace = cardSize * (uint64_t).9;
-        console_message = "SD Card Size : " + String(cardSize) + "MBytes";
-        Write_Console_Message();
-        console_message = "SD Total Bytes : " + String(SD.totalBytes());
-        Write_Console_Message();
-        console_message = "SD Used bytes : " + String(SD.usedBytes());
-        Write_Console_Message();
-        console_message = "SD Card Initialisation Complete";
-        Write_Console_Message();
-        console_message = "Create Console Logging File";
-        Write_Console_Message();
+        Write_Console_Message("SD Card Size : " + String(cardSize) + "MBytes");
+        Write_Console_Message("SD Total Bytes : " + String(SD.totalBytes()));
+        Write_Console_Message("SD Used bytes : " + String(SD.usedBytes()));
+        Write_Console_Message("SD Card Initialisation Complete");
+        Write_Console_Message("Create Console Logging File");
     }
     Last_Boot_Time = GetTime(true);
     Last_Boot_Date = GetDate(true);
     This_Date = GetDate(false);
     Create_New_Data_File();
     Create_New_Console_File();
-    console_message = "End of Setup";
-    Write_Console_Message();
-    console_message = "Running in Full Function Mode";
-    Write_Console_Message();
+    Write_Console_Message("End of Setup");
+    Write_Console_Message("Running in Full Function Mode");
     int count = 0;
     for (int x = 0; x <= 120; x++) {
         if (incomplete_weather_api_link[x] == '\0') break;
@@ -387,8 +423,6 @@ void loop() {
     Check_Blue_Switch();                                    // check if wipesd switch has been pressed
     Drive_Running_Led();                                    // on when started, flashing when not, flashing with SD led if waiting for reset
     server.handleClient();                                  // handle any messages from the website
-    // if (started) {                                       // user has started the readings
-        // Energy Information - every 5 seconds -------------------------------------------------------------------------------
     if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
         last_cycle = millis();                            // update the last read milli second reading
         // weather start ------------------------------------------------------------------------------------------
@@ -401,17 +435,7 @@ void loop() {
                 Parse_Weather_Info(payload);
             }
             else {
-                console_message = "Obtaining Weather Information Failed, Return code: " + String(httpCode);
-                Write_Console_Message();
-                weather_record.temp = 0;
-                weather_record.temp_min = 0;
-                weather_record.temp_max = 0;
-                weather_record.temp_feel = 0;
-                weather_record.pressure = 0;
-                weather_record.humidity = 0;
-                weather_record.wind_direction = 0;
-                weather_record.wind_speed = 0;
-                weather_record.weather = "";
+                Write_Console_Message("Obtaining Weather Information Failed, Return code: " + String(httpCode));
             }
             http.end();
         }
@@ -419,11 +443,11 @@ void loop() {
         // sensor start -------------------------------------------------------------------------------------------
         for (int i = 0; i < 9; i++) {                           // transmit the requests, assembling the Values array
             Send_Request(i);                                    // send the RS485 Port the requests, one by one
-            Data_Values[i] = Receive(i);                        // get the reply
+            Receive(i);                                         // receive the sensor output
         }                                                       // all values should now be populated
         // sensor end ---------------------------------------------------------------------------------------------
-        Data_Date = GetDate(true);                              // get the date of the reading
-        Data_Time = GetTime(true);                              // get the time of the reading
+        Data_File_Values_0 = GetDate(true);                     // get the date of the reading
+        Data_File_Values_1 = GetTime(true);                     // get the time of the reading
         if (This_Date != GetDate(false) && New_Day_File_Required == true) {
             Create_New_Data_File();                             // so create a new Data File with new file name
             Create_New_Console_File();
@@ -436,14 +460,12 @@ void loop() {
         Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
         Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
     }                                                           // end of if millis >5000
-//}                                                               // end of if started
 }                                                                   // end of loop
 void Write_New_Data_Record_to_Data_File() {
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     Datafile = SD.open("/" + DataFileName, FILE_APPEND);            // open the SD file
     if (!Datafile) {                                                // oops - file not available!
-        console_message = "Error re-opening Datafile:" + String(DataFileName);
-        Write_Console_Message();
+        Write_Console_Message("Error re-opening Datafile:" + String(DataFileName));
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -453,161 +475,133 @@ void Write_New_Data_Record_to_Data_File() {
     }
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
     console.print(millis(), DEC); console.println("\tNew Data Record Written");
-    Datafile.print(Data_Date); Datafile.print(",");                 // 1. dd/mm/yyyy,
-    Datafile.print(Data_Time); Datafile.print(",");                 // 2. dd/mm/yyyy,hh:mm:ss,
-    SDprintDouble(Data_Values[0], 1); Datafile.print(",");          // 3. voltage
-    SDprintDouble(Data_Values[1], 3); Datafile.print(",");          // 4. amperage
-    SDprintDouble(Data_Values[2], 2); Datafile.print(",");          // 5. wattage
-    SDprintDouble(Data_Values[3], 1); Datafile.print(",");          // 6. up time
-    SDprintDouble(Data_Values[4], 3); Datafile.print(",");          // 7. kilowatt hour
-    SDprintDouble(Data_Values[5], 2); Datafile.print(",");          // 8. power factor
-    SDprintDouble(Data_Values[6], 1); Datafile.print(",");          // 9. unknown
-    SDprintDouble(Data_Values[7], 1); Datafile.print(",");          // 10. frequency
-    SDprintDouble(Data_Values[8], 1); Datafile.print(",");      // 11. temperature
-    //                                                                      weather values
-    SDprintDouble(weather_record.temp, 2); Datafile.print(",");             // 12. temperature
-    SDprintDouble(weather_record.pressure, 0); Datafile.print(",");         // 13. pressure
-    SDprintDouble(weather_record.humidity, 0); Datafile.print(",");         // 14. humidity
-    SDprintDouble(weather_record.wind_direction, 0); Datafile.print(",");   // 15. wind direction
-    SDprintDouble(weather_record.wind_speed, 0); Datafile.print(",");       // 16. wind speed
-    Datafile.print(weather_record.weather);                                 // 17. description
-    Datafile.print("\n");                                      // end of record
-    Datafile.close();                                          // close the sd file
-    Datafile.flush();                                          // make sure it has been written to SD
-    digitalWrite(SD_Active_led_pin, LOW);
-    // highest voltage ------------------------------------------------------------------------------------------------
-    if (Data_Values[0] >= highest_voltage) {
-        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
-            time_of_highest_voltage[i] = Data_Time[i];
-        }
-        highest_voltage = Data_Values[0];                       // update the largest current value
-    }
-    // lowest voltage -------------------------------------------------------------------------------------------------
-    if (Data_Values[0] <= lowest_voltage) {
-        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
-            time_of_lowest_voltage[i] = Data_Time[i];
-        }
-        lowest_voltage = Data_Values[0];                        // update the largest current value
-    }
-    // largest amperage -----------------------------------------------------------------------------------------------    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
-    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-        time_of_largest_amperage[i] = Data_Time[i];
-    }
-    largest_amperage = Data_Values[1];                      // update the largest current value
-    // weather information --------------------------------------------------------------------------------------------
-    if (weather_record.temp >= highest_temperature) {           // update the highest weather temperature
-        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
-            time_of_highest_temperature[i] = Data_Time[i];
-        }
-        highest_temperature = weather_record.temp;              // update the highest weather temperature
-    }
-    // latest temperature ---------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_temperature[i] = Data_Time[i];
-    }
-    latest_temperature = weather_record.temp;                   // update the highest weather temperature
-    // lowest temperature ---------------------------------------------------------------------------------------------
-    if (weather_record.temp <= lowest_temperature) {            // update the lowest weather temperature
-        for (i = 0; i <= Data_Time.length() + 1; i++) {         // load the time
-            time_of_lowest_temperature[i] = Data_Time[i];
-        }
-        lowest_temperature = weather_record.temp;               // update the lowest weather temperature
-    }
-    // pressure -------------------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_pressure[i] = Data_Time[i];
-    }
-    latest_pressure = weather_record.pressure;
-    // humidity -------------------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_humidity[i] = Data_Time[i];
-    }
-    latest_humidity = weather_record.humidity;
-    // wind speed -----------------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_wind_speed[i] = Data_Time[i];
-    }
-    latest_wind_speed = weather_record.wind_speed;
-    // wind direction -------------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_wind_direction[i] = Data_Time[i];
-    }
-    latest_wind_direction = weather_record.wind_direction;
-    // weather description --------------------------------------------------------------------------------------------
-    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-        time_of_latest_weather[i] = Data_Time[i];
-    }
-    latest_weather = weather_record.weather;
-    // ----------------------------------------------------------------------------------------------------------------
-    SD_freespace_double = (double)SD_freespace / 1000000;
-    if (SD_freespace < critical_SD_freespace) {
-        console_message = "\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
-        Write_Console_Message();
-    }
-    record_count++;                                             // increment the record count, the array pointer
-    current_data_record_count++;                                     // increment the current record count
-    digitalWrite(SD_Active_led_pin, LOW);                       // turn the SD activity LED on
+    Datafile.print(Data_File_Values_0); Datafile.print(",");                        // [0] dd/mm/yyyy,
+    Datafile.print(Data_File_Values_1); Datafile.print(",");                        // [1] hh:mm:ss,
+    SDprintDouble(Data_File_Values[Voltage], 1); Datafile.print(",");               // [2] voltage
+    SDprintDouble(Data_File_Values[Amperage], 3); Datafile.print(",");              // [3] amperage
+    SDprintDouble(Data_File_Values[Wattage], 2); Datafile.print(",");               // [4] wattage
+    SDprintDouble(Data_File_Values[UpTime], 2); Datafile.print(",");                // [5] up time
+    SDprintDouble(Data_File_Values[Kilowatthour], 3); Datafile.print(",");          // [6] kilowatt hour
+    SDprintDouble(Data_File_Values[PowerFactor], 2); Datafile.print(",");           // [7] power factor
+    SDprintDouble(Data_File_Values[Unknown], 1); Datafile.print(",");               // [8] unknown
+    SDprintDouble(Data_File_Values[Frequency], 1); Datafile.print(",");             // [9] frequency
+    SDprintDouble(Data_File_Values[Sensor_Temperature], 1); Datafile.print(",");    // [10] sensor temperature
+    SDprintDouble(Data_File_Values[Weather_Temperature], 2); Datafile.print(",");   // [11] weather temperature
+    SDprintDouble(Data_File_Values[Temperature_Feels_Like], 2); Datafile.print(",");// [12] temperature feels like
+    SDprintDouble(Data_File_Values[Temperature_Maximum], 2); Datafile.print(",");   // [13] temperature maximum
+    SDprintDouble(Data_File_Values[Temperature_Minimum], 2); Datafile.print(",");   // [14] temperature minimum
+    SDprintDouble(Data_File_Values[Atmospheric_Pressure], 0); Datafile.print(",");  // [15] atmospheric pressure
+    SDprintDouble(Data_File_Values[Relative_Humidity], 0); Datafile.print(",");     // [16] relative humidity
+    SDprintDouble(Data_File_Values[Wind_Speed], 0); Datafile.print(",");            // [17] wind direction
+    SDprintDouble(Data_File_Values[Wind_Direction], 0); Datafile.print(",");        // [18] wind speed
+    Datafile.print(Data_File_Values_19);                                           // [19] weather description,
+    Datafile.print("\n");                           // end of record
+    Datafile.close();                               // close the sd file
+    Datafile.flush();                               // make sure it has been written to SD
+    Global_Data_Table_Pointer++;                    // increment the record count, the array pointer
+    Global_Data_Record_Count++;                     // increment the current record count
+    digitalWrite(SD_Active_led_pin, LOW);           // turn the SD activity LED on
+    Update_Webpage_Variables_from_Data_File_Values(Data_File_Values);
+#ifdef DISPLAY_DATA_VALUES_WRITTEN
+    console.print(millis(), DEC); console.println("\tData Values Written:");
+    console.print("\t\tDate: "); console.println(Data_File_Values_0);                                                                   // [0] date
+    console.print("\t\tTime: "); console.println(Data_File_Values_1);                                                                   // [1] time
+    console.print("\t\tVoltage: "); printConsoleDouble(Data_File_Values[Voltage], 6); console.println();                                // [2] voltage
+    console.print("\t\tAmperage: "); printConsoleDouble(Data_File_Values[Amperage], 6); console.println();                              // [3] amperage
+    console.print("\t\tWattage: "); printConsoleDouble(Data_File_Values[Wattage], 6); console.println();                                // [4] wattage
+    console.print("\t\tUpTime: "); printConsoleDouble(Data_File_Values[UpTime], 6); console.println();                                  // [5] up time
+    console.print("\t\tKilowatthour: "); printConsoleDouble(Data_File_Values[Kilowatthour], 6); console.println();                      // [6] kilowatt hour
+    console.print("\t\tPower Factor: "); printConsoleDouble(Data_File_Values[PowerFactor], 6); console.println();                       // [7] power factor
+    console.print("\t\tUnknown: "); printConsoleDouble(Data_File_Values[Unknown], 6); console.println();                                // [8] unknown
+    console.print("\t\tFrequency: "); printConsoleDouble(Data_File_Values[Frequency], 6); console.println();                            // [9] frequency
+    console.print("\t\tSensor Temperature: "); printConsoleDouble(Data_File_Values[Sensor_Temperature], 6); console.println();          // [10] sensor temperature
+    console.print("\t\tWeather Temperature: "); printConsoleDouble(Data_File_Values[Weather_Temperature], 6); console.println();        // [11] weather temperature
+    console.print("\t\tTemperature Feels Like: "); printConsoleDouble(Data_File_Values[Temperature_Feels_Like], 6); console.println();  // [12] temperature feels like
+    console.print("\t\tTemperature Maximum: "); printConsoleDouble(Data_File_Values[Temperature_Maximum], 6); console.println();        // [13] temperature maximum
+    console.print("\t\tTemperature Minimum: "); printConsoleDouble(Data_File_Values[Temperature_Minimum], 6); console.println();        // [14] temperature minimum
+    console.print("\t\tAtmospheric Pressure: "); printConsoleDouble(Data_File_Values[Atmospheric_Pressure], 6); console.println();      // [15] atmospheric pressure
+    console.print("\t\tRelative Humidity: "); printConsoleDouble(Data_File_Values[Relative_Humidity], 6); console.println();            // [16] relative humidity
+    console.print("\t\tWind Speed: "); printConsoleDouble(Data_File_Values[Wind_Speed], 6); console.println();                          // [17] wind direction
+    console.print("\t\tWind Direction: "); printConsoleDouble(Data_File_Values[Wind_Direction], 6); console.println();                  // [18] wind speed
+    console.print("\t\tWeather Description"); console.println(Data_File_Values_19);                                                     // [19] weather description
+#endif
 }
 void Add_New_Data_Record_to_Display_Table() {
-    if (record_count > table_size) {                            // table full, shuffle fifo
-        record_count = table_size;
-        for (i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
-            strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
-            strcpy(readings_table[i].ltime, readings_table[i + 1].ltime);           // time
-            readings_table[i].voltage = readings_table[i + 1].voltage;              // voltage
-            readings_table[i].amperage = readings_table[i + 1].amperage;            // amperage
-            readings_table[i].wattage = readings_table[i + 1].wattage;              // wattage
-            readings_table[i].uptime = readings_table[i + 1].uptime;                // up time
-            readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;    // kilowatt hour
-            readings_table[i].powerfactor = readings_table[i + 1].powerfactor;      // power factor
-            readings_table[i].unknown = readings_table[i + 1].unknown;              // unknown
-            readings_table[i].frequency = readings_table[i + 1].frequency;          // frequency
-            readings_table[i].temperature = readings_table[i + 1].temperature;      // temperature
+    if (Global_Data_Table_Pointer > data_table_size) {                                                   // table full, shuffle fifo
+        for (i = 0; i < data_table_size; i++) {                                                          // shuffle the rows up, losing row 0, make row [table_size] free
+            strncpy(readings_table[i].ldate, readings_table[i + 1].ldate, sizeof(readings_table[i].ldate)); // [0]  date
+            strncpy(readings_table[i].ltime, readings_table[i + 1].ltime, sizeof(readings_table[i].ltime)); // [1]  time
+            readings_table[i].voltage = readings_table[i + 1].voltage;                                      // [2]  voltage
+            readings_table[i].amperage = readings_table[i + 1].amperage;                                    // [3]  amperage
+            readings_table[i].wattage = readings_table[i + 1].wattage;                                      // [4]  wattage
+            readings_table[i].uptime = readings_table[i + 1].uptime;                                        // [5]  up time
+            readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;                            // [6]  kilowatt hour
+            readings_table[i].powerfactor = readings_table[i + 1].powerfactor;                              // [7]  power factor
+            readings_table[i].unknown = readings_table[i + 1].unknown;                                      // [8]  unknown
+            readings_table[i].frequency = readings_table[i + 1].frequency;                                  // [9]  frequency
+            readings_table[i].sensor_temperature = readings_table[i + 1].sensor_temperature;                // [10] sensor temperature
+            readings_table[i].weather_temperature = readings_table[i + 1].weather_temperature;              // [11] weather temperature
+            readings_table[i].temperature_feels_like = readings_table[i + 1].temperature_feels_like;        // [12] temperature
+            readings_table[i].temperature_maximum = readings_table[i + 1].temperature_maximum;              // [13] temperature maximum
+            readings_table[i].temperature_minimum = readings_table[i + 1].temperature_minimum;              // [14] temperature minimum
+            readings_table[i].atmospheric_pressure = readings_table[i + 1].atmospheric_pressure;            // [15] atmospheric pressure
+            readings_table[i].relative_humidity = readings_table[i + 1].relative_humidity;                  // [16] relative humidity
+            readings_table[i].wind_speed = readings_table[i + 1].wind_speed;                                // [17] wind speed
+            readings_table[i].wind_direction = readings_table[i + 1].wind_direction;                        // [18] wind direction
+            strncpy(readings_table[i].weather_description, readings_table[i + 1].weather_description, sizeof(readings_table[i].weather_description));// [19] weather description
         }
-        record_count = table_size;                                                  // subsequent records will be added at the end of the table
-        for (i = 0; i <= Data_Date.length() + 1; i++) {
-            readings_table[table_size].ldate[i] = Data_Date[i];
-        }                                                                           // write the new reading to the end of the table
-        for (i = 0; i <= Data_Time.length() + 1; i++) {
-            readings_table[table_size].ltime[i] = Data_Time[i];
-        }
-        readings_table[table_size].voltage = Data_Values[Voltage];
-        readings_table[table_size].amperage = Data_Values[Amperage];
-        readings_table[table_size].wattage = Data_Values[Wattage];                 // write the watts value into the table
-        readings_table[table_size].uptime = Data_Values[UpTime];
-        readings_table[table_size].kilowatthour = Data_Values[Kilowatthour];
-        readings_table[table_size].powerfactor = Data_Values[PowerFactor];
-        readings_table[table_size].unknown = Data_Values[Unknown];
-        readings_table[table_size].frequency = Data_Values[Frequency];
-        readings_table[table_size].temperature = Data_Values[Temperature];
+        Global_Data_Table_Pointer = data_table_size;                                                             // subsequent records will be added at the end of the table
+        strncpy(readings_table[data_table_size].ldate, Data_File_Values_0.c_str(), sizeof(readings_table[data_table_size].ldate));                       // [0]  date
+        strncpy(readings_table[data_table_size].ltime, Data_File_Values_1.c_str(), sizeof(readings_table[data_table_size].ltime));                       // [1]  time
+        readings_table[data_table_size].voltage = Data_File_Values[Voltage];                             // [2]  voltage
+        readings_table[data_table_size].amperage = Data_File_Values[Amperage];                           // [3]  amperage
+        readings_table[data_table_size].wattage = Data_File_Values[Wattage];                             // [4]  wattage
+        readings_table[data_table_size].uptime = Data_File_Values[UpTime];                               // [5]  uptime
+        readings_table[data_table_size].kilowatthour = Data_File_Values[Kilowatthour];                   // [6]  kilowatthours
+        readings_table[data_table_size].powerfactor = Data_File_Values[PowerFactor];                     // [7]  power factor
+        readings_table[data_table_size].unknown = Data_File_Values[Unknown];                             // [8]  unknown
+        readings_table[data_table_size].frequency = Data_File_Values[Frequency];                         // [9]  frequency
+        readings_table[data_table_size].sensor_temperature = Data_File_Values[Sensor_Temperature];       // [10] sensor temperature
+        readings_table[data_table_size].weather_temperature = Data_File_Values[Weather_Temperature];     // [11] weather temperature
+        readings_table[data_table_size].temperature_feels_like = Data_File_Values[Temperature_Feels_Like]; // [12] temperature feels like
+        readings_table[data_table_size].temperature_maximum = Data_File_Values[Temperature_Maximum];     // [13] temperature maximum
+        readings_table[data_table_size].temperature_minimum = Data_File_Values[Temperature_Minimum];     // [14] temperature minimum
+        readings_table[data_table_size].atmospheric_pressure = Data_File_Values[Atmospheric_Pressure];   // [15] atmospheric pressure
+        readings_table[data_table_size].relative_humidity = Data_File_Values[Relative_Humidity];         // [16] relative humidity
+        readings_table[data_table_size].wind_speed = Data_File_Values[Wind_Speed];                       // [17] wind speed
+        readings_table[data_table_size].weather_temperature = Data_File_Values[Weather_Temperature];     // [18] wind direction
+        strncpy(readings_table[data_table_size].weather_description, Data_File_Values_19.c_str(), sizeof(readings_table[data_table_size].weather_description));        // [19] weather description
     }
     else {                                                                          // add the record to the table
-        for (i = 0; i <= Data_Date.length() + 1; i++) {
-            readings_table[record_count].ldate[i] = Data_Date[i];
-        }                                                                         // write the new reading to the end of the table
-        for (i = 0; i <= Data_Time.length() + 1; i++) {
-            readings_table[record_count].ltime[i] = Data_Time[i];
-        }
-        readings_table[record_count].voltage = Data_Values[Voltage];
-        readings_table[record_count].amperage = Data_Values[Amperage];
-        readings_table[record_count].wattage = Data_Values[Wattage];
-        readings_table[record_count].uptime = Data_Values[UpTime];
-        readings_table[record_count].kilowatthour = Data_Values[Kilowatthour];
-        readings_table[record_count].powerfactor = Data_Values[PowerFactor];
-        readings_table[record_count].unknown = Data_Values[Unknown];
-        readings_table[record_count].frequency = Data_Values[Frequency];
-        readings_table[record_count].temperature = Data_Values[Temperature];
-    }                                                                           // end of if record_count > table_size
+        strncpy(readings_table[Global_Data_Table_Pointer].ldate, Data_File_Values_0.c_str(), sizeof(readings_table[Global_Data_Table_Pointer].ldate));                       // [0]  date
+        strncpy(readings_table[Global_Data_Table_Pointer].ltime, Data_File_Values_1.c_str(), sizeof(readings_table[Global_Data_Table_Pointer].ltime));                       // [1]  time
+        readings_table[Global_Data_Table_Pointer].voltage = Data_File_Values[Voltage];                             // [2]  voltage
+        readings_table[Global_Data_Table_Pointer].amperage = Data_File_Values[Amperage];                           // [3]  amperage
+        readings_table[Global_Data_Table_Pointer].wattage = Data_File_Values[Wattage];                             // [4]  wattage
+        readings_table[Global_Data_Table_Pointer].uptime = Data_File_Values[UpTime];                               // [5]  uptime
+        readings_table[Global_Data_Table_Pointer].kilowatthour = Data_File_Values[Kilowatthour];                   // [6]  kilowatthours
+        readings_table[Global_Data_Table_Pointer].powerfactor = Data_File_Values[PowerFactor];                     // [7]  power factor
+        readings_table[Global_Data_Table_Pointer].unknown = Data_File_Values[Unknown];                             // [8]  unknown
+        readings_table[Global_Data_Table_Pointer].frequency = Data_File_Values[Frequency];                         // [9]  frequency
+        readings_table[Global_Data_Table_Pointer].sensor_temperature = Data_File_Values[Sensor_Temperature];       // [10] sensor temperature
+        readings_table[Global_Data_Table_Pointer].weather_temperature = Data_File_Values[Weather_Temperature];     // [11] weather temperature
+        readings_table[Global_Data_Table_Pointer].temperature_feels_like = Data_File_Values[Temperature_Feels_Like]; // [12] temperature feels like
+        readings_table[Global_Data_Table_Pointer].temperature_maximum = Data_File_Values[Temperature_Maximum];     // [13] temperature maximum
+        readings_table[Global_Data_Table_Pointer].temperature_minimum = Data_File_Values[Temperature_Minimum];     // [14] temperature minimum
+        readings_table[Global_Data_Table_Pointer].atmospheric_pressure = Data_File_Values[Atmospheric_Pressure];   // [15] atmospheric pressure
+        readings_table[Global_Data_Table_Pointer].relative_humidity = Data_File_Values[Relative_Humidity];         // [16] relative humidity
+        readings_table[Global_Data_Table_Pointer].wind_speed = Data_File_Values[Wind_Speed];                       // [17] wind speed
+        readings_table[Global_Data_Table_Pointer].weather_temperature = Data_File_Values[Weather_Temperature];     // [18] wind direction
+        strncpy(readings_table[Global_Data_Table_Pointer].weather_description, Data_File_Values_19.c_str(), sizeof(readings_table[Global_Data_Table_Pointer].weather_description));        // [19] weather description
+    }
 }
 void Create_New_Console_File() {
-    char milliseconds[10];
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     ConsoleFileName = GetDate(false) + ".txt";                      // yes, so create a new file
     if (!SD.exists("/" + ConsoleFileName)) {
         Consolefile = SD.open("/" + ConsoleFileName, FILE_WRITE);
         if (!Consolefile) {                                         // log file not opened
-            console_message = "Error opening Console file: [" + String(ConsoleFileName) + "]";
-            Write_Console_Message();
+            Write_Console_Message("Error opening Console file: [" + String(ConsoleFileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -615,14 +609,14 @@ void Create_New_Console_File() {
                 Check_Red_Switch();
             }
         }
-        Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + milliseconds + ",Console File Started");
+
+        Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + String(millis()) + ",Console File Started");
         Consolefile.close();
         Consolefile.flush();
-        console_record_count = 1;
+        Global_Console_Table_Pointer = 1;
     }
     else {
-        console_message = "Console File " + String(ConsoleFileName) + " already exists";
-        Write_Console_Message();
+        Write_Console_Message("Console File " + String(ConsoleFileName) + " already exists");
         Prefill_Console_Array();
     }
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
@@ -633,8 +627,7 @@ void Create_New_Data_File() {
     if (!SD.exists("/" + DataFileName)) {
         Datafile = SD.open("/" + DataFileName, FILE_WRITE);
         if (!Datafile) {                                            // log file not opened
-            console_message = "Error opening Data file @ line 324 [" + String(DataFileName) + "]";
-            Write_Console_Message();
+            Write_Console_Message("Error opening Data file @ line 324 [" + String(DataFileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -642,28 +635,24 @@ void Create_New_Data_File() {
                 Check_Red_Switch();
             }
         }
-        Datafile.print("Date,");                                    // write first column header
-        Datafile.print("Time,");                                    // write second column header
-        for (int x = 0; x < 14; x++) {                               // write data column headings into the SD file
-            Datafile.print(RS485_FieldNames[x]);
+        for (int x = 0; x < 19; x++) {                               // write data column headings into the SD file
+            Datafile.print(Data_File_Field_Names[x]);
             Datafile.print(",");
         }
-        Datafile.println(RS485_FieldNames[14]);
+        Datafile.println(Data_File_Field_Names[19]);
         Datafile.close();
         Datafile.flush();
-        current_data_record_count = 0;
+        Global_Data_Table_Pointer = 0;
         digitalWrite(SD_Active_led_pin, LOW);
         This_Date = GetDate(false);                                 // update the current date
-        console_message = "Data File Created " + DataFileName;
-        Write_Console_Message();
+        Write_Console_Message("Data File Created " + DataFileName);
     }
     else {
-        console_message = "Data File " + String(DataFileName) + " already exists";
-        Write_Console_Message();
+        Write_Console_Message("Data File " + String(DataFileName) + " already exists");
         Prefill_Array();
     }
 }
-void Write_Console_Message() {
+void Write_Console_Message(String console_message) {
     String saved_console_message = console_message;
     String Date = "1951/18/11";
     String Time = "00:00:00";
@@ -675,17 +664,15 @@ void Write_Console_Message() {
             for (int x = 0; x < pre_loop_message_count; x++) {
                 pre_date = GetDate(true);
                 pre_time = GetTime(true);
-                console_message = pre_loop_messages[x];
-                Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_millis_values[x]);
-                Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_millis_values[x]);
+                Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_millis_values[x], pre_loop_messages[x]);
+                Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_millis_values[x], pre_loop_messages[x]);
             }
             pre_loop_message_count = 0;
         }
         Date = GetDate(true);
         Time = GetTime(true);
-        console_message = saved_console_message;                            // restore the current console_message
-        Write_New_Console_Message_to_Console_File(Date, Time, milliseconds);
-        Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds);
+        Write_New_Console_Message_to_Console_File(Date, Time, milliseconds, saved_console_message);
+        Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds, saved_console_message);
     }
     else {
         pre_loop_millis_values[pre_loop_message_count] = millis();
@@ -695,12 +682,14 @@ void Write_Console_Message() {
     console_message = saved_console_message;
     console.print(millis(), DEC); console.print("\t"); console.println(console_message);
 }
-void Write_New_Console_Message_to_Console_File(String date, String time, unsigned long milliseconds) {
+void Write_New_Console_Message_to_Console_File(String date, String time, unsigned long milliseconds, String console_message) {
+#ifdef DISPLAY_PROGRAMME_PROGRESS
+    console.print(millis(), DEC); console.println("\tWrite_New_Console_Message_to_Console_File Entered");
+#endif
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);      // open the SD file
     if (!Consolefile) {                                             // oops - file not available!
-        console_message = "Error re-opening Console file: " + String(ConsoleFileName);
-        Write_Console_Message();
+        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -708,13 +697,7 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
             Check_Red_Switch();                                   // Reset will restart the processor so no return
         }
     }
-    Consolefile.print(date);
-    Consolefile.print(",");
-    Consolefile.print(time);
-    Consolefile.print(",");
-    Consolefile.print(milliseconds);
-    Consolefile.print(",");
-    Consolefile.println(console_message);
+    Consolefile.println(date + "," + time + "," + milliseconds + "," + console_message);
     Consolefile.close();                                            // close the sd file
     Consolefile.flush();                                            // make sure it has been written to SD
     SD_freespace_double = (double)SD_freespace / 1000000;
@@ -722,244 +705,335 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
         for (int x = 0; x < console_message.length(); x++) {        // reserve the current console_message
             temp_message[x] = console_message[x];
         }
-        console_message = "WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes";
-        Write_Console_Message();
+        Write_Console_Message("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
         for (int x = 0; x < temp_message.length(); x++) {            // restore the console_message
             console_message[x] = temp_message[x];
         }
     }
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
 }
-void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned long milliseconds) {
-    if (console_record_count > console_table_size) {                                // table full, shuffle fifo
+void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned long milliseconds, String console_message) {
+    if (Global_Data_Table_Pointer > console_table_size) {                           // table full, shuffle fifo
         for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
-            strcpy(console_table[i].ldate, console_table[i + 1].ldate);             // date
-            strcpy(console_table[i].ltime, console_table[i + 1].ltime);             // time
+            strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
+            strncpy(console_table[i].ltime, console_table[i + 1].ltime, sizeof(console_table[i].ltime));             // time
             console_table[i].milliseconds = console_table[i + 1].milliseconds;
-            strcpy(console_table[i].message, console_table[i + 1].message);
+            strncpy(console_table[i].message, console_table[i + 1].message, sizeof(console_table[i].message));
         }
-        console_record_count = console_table_size;               // subsequent records will be added at the end of the table
-        for (i = 0; i < 10; i++) {                              // write the new message date (string) onto the end of the table Char array
-            console_table[console_table_size].ldate[i] = date[i];
-        }
-        for (i = 0; i < 8; i++) {                              // write the new message time onto the end of the table
-            console_table[console_table_size].ltime[i] = time[i];
-        }
+        Global_Console_Table_Pointer = console_table_size;               // subsequent records will be added at the end of the table
+        strncpy(console_table[console_table_size].ldate, date.c_str(), sizeof(console_table[console_table_size].ldate));
+        strncpy(console_table[console_table_size].ltime, time.c_str(), sizeof(console_table[console_table_size].ltime));
         console_table[console_table_size].milliseconds = milliseconds;
-        for (i = 0; i <= 119; i++) {
-            console_table[console_table_size].message[i] = console_message[i];   // write the new message onto the end of the table
-            if (console_table[console_table_size].message[i] == '\0') break;
-        }
+        strncpy(console_table[console_table_size].message, console_message.c_str(), sizeof(console_table[console_table_size].message));   // write the new message onto the end of the table
     }
     else {                                                                      // add the record to the table
-        for (i = 0; i < 10; i++) {
-            console_table[console_record_count].ldate[i] = date[i];
-        }                                                                       // write the new reading to the end of the table
-        for (i = 0; i < 8; i++) {
-            console_table[console_record_count].ltime[i] = time[i];
-        }
-        console_table[console_record_count].milliseconds = milliseconds;
-        for (i = 0; i < 119; i++) {
-            console_table[console_record_count].message[i] = console_message[i];      // write the new message onto the end of the table
-            if (console_table[console_record_count].message[i] == '\0') break;
-        }
+        strncpy(console_table[Global_Console_Table_Pointer].ldate, date.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ldate));
+        strncpy(console_table[Global_Console_Table_Pointer].ltime, time.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ltime));
+        console_table[Global_Console_Table_Pointer].milliseconds = milliseconds;
+        strncpy(console_table[Global_Console_Table_Pointer].message, console_message.c_str(), sizeof(console_table[Global_Console_Table_Pointer].message));      // write the new message onto the end of the table
     }
-    console_record_count++;                                                     // increment the console record count
+    Global_Console_Table_Pointer++;                                             // increment the console table pointer
+    Global_Console_Record_Count++;                                              // increment the console record count
 }
 void Check_WiFi() {
     if (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
-        console_message = "WiFi Connection Failed, Attempting to Reconnect";
-        Write_Console_Message();
+        Write_Console_Message("WiFi Connection Failed, Attempting to Reconnect");
         delay(500);
         StartWiFi(ssid, password);
     }
 }
 int StartWiFi(const char* ssid, const char* password) {
-    console_message = "WiFi Connecting to " + String(ssid);
-    Write_Console_Message();
+    Write_Console_Message("WiFi Connecting to " + String(ssid));
     WiFi.disconnect(true);                                      // disconnect to set new wifi connection
     WiFi.begin(ssid, password);                                 // connect to the wifi network
     int WiFi_Status = WiFi.status();
-    console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
-    Write_Console_Message();
+    Write_Console_Message("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     int wifi_connection_attempts = 0;                           // zero the attempt counter
     while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
         delay(500);
-        console_message = "Connection attempt " + String(wifi_connection_attempts);
-        Write_Console_Message();
+        Write_Console_Message("Connection attempt " + String(wifi_connection_attempts));
         if (wifi_connection_attempts++ > 20) {
-            console_message = "Network Error, Restarting";
-            Write_Console_Message();
+            Write_Console_Message("Network Error, Restarting");
             ESP.restart();
         }
     }
     WiFi_Status = WiFi.status();
-    console_message = "WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status];  // display current status of WiFi
-    Write_Console_Message();
+    Write_Console_Message("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     WiFi_Signal_Strength = (int)WiFi.RSSI();
-    console_message = "WiFi Signal Strength:" + String(WiFi_Signal_Strength);
-    Write_Console_Message();
-    console_message = "WiFi IP Address: " + String(WiFi.localIP().toString().c_str());
-    Write_Console_Message();
+    Write_Console_Message("WiFi Signal Strength:" + String(WiFi_Signal_Strength));
+    Write_Console_Message("WiFi IP Address: " + String(WiFi.localIP().toString().c_str()));
     return true;
 }
 void StartTime() {
-    console_message = "Starting Time Server";
-    Write_Console_Message();
+    Write_Console_Message("Starting Time Server");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    console_message = "Time Server Started";
-    Write_Console_Message();
+    Write_Console_Message("Time Server Started");
 }
 void Prefill_Array() {
-    int datacharacter_count = 0;
-    char dataField[20];
+    int character_count = 0;
+    char Field[25];
     int datafieldNo = 1;
     char datatemp;
-    double this_temperature = 0;
-    current_data_record_count = 0;
+    int prefill_Data_Table_Pointer = 0;
+    Global_Data_Record_Count = 0;                                              // global index of next table entry
+    Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
+    Write_Console_Message("Loading datafile from " + String(DataFileName));
     File dataFile = SD.open("/" + DataFileName, FILE_READ);
     if (dataFile) {
         while (dataFile.available()) {                                           // throw the first row, column headers, away
             datatemp = dataFile.read();
             if (datatemp == '\n') break;
         }
-        console_message = "Loading datafile from " + String(DataFileName);
-        Write_Console_Message();
         while (dataFile.available()) {                                           // do while there are data available
             Flash_SD_LED();                                                     // flash the sd led
             datatemp = dataFile.read();
-            dataField[datacharacter_count++] = datatemp;                            // add it to the csvfield string
+            Field[character_count++] = datatemp;                            // add it to the csvfield string
             if (datatemp == ',' || datatemp == '\n') {                                  // look for end of field
-                dataField[datacharacter_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
+                Field[character_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
                 switch (datafieldNo) {
                 case 1:
-                    strcpy(readings_table[record_count].ldate, dataField);       // Date
+                    strncpy(readings_table[prefill_Data_Table_Pointer].ldate, Field, sizeof(readings_table[prefill_Data_Table_Pointer].ldate));       // Date
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array ldate from file: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].ldate);
                     break;
                 case 2:
-                    strcpy(readings_table[record_count].ltime, dataField);       // Time
+                    strncpy(readings_table[prefill_Data_Table_Pointer].ltime, Field, sizeof(readings_table[prefill_Data_Table_Pointer].ltime));       // Time
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array ltime from file: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].ltime);
                     break;
                 case 3:
-                    readings_table[record_count].voltage = atof(dataField);      // Voltage
+                    readings_table[prefill_Data_Table_Pointer].voltage = atof(Field);      // Voltage
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array voltage: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].voltage);
                     break;
                 case 4:
-                    readings_table[record_count].amperage = atof(dataField);     // Amperage
+                    readings_table[prefill_Data_Table_Pointer].amperage = atof(Field);     // Amperage
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array amperage: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].amperage);
                     break;
                 case 5:
-                    readings_table[record_count].wattage = atof(dataField);      // Wattage
+                    readings_table[prefill_Data_Table_Pointer].wattage = atof(Field);      // Wattage
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array wattage: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].wattage);
                     break;
                 case 6:
-                    readings_table[record_count].uptime = atof(dataField);       // Up Time
+                    readings_table[prefill_Data_Table_Pointer].uptime = atof(Field);       // Up Time
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array uptime: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].uptime);
                     break;
                 case 7:
-                    readings_table[record_count].kilowatthour = atof(dataField); // KiloWatt Hour
+                    readings_table[prefill_Data_Table_Pointer].kilowatthour = atof(Field); // KiloWatt Hour
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array kilowatthour: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].kilowatthour);
                     break;
                 case 8:
-                    readings_table[record_count].powerfactor = atof(dataField);  // Power Factor
+                    readings_table[prefill_Data_Table_Pointer].powerfactor = atof(Field);  // Power Factor
+                    //                   console.print(millis(), DEC); console.print("\tPrefill_Array power factor: ");
+                    //                   console.println(readings_table[Data_Table_Pointer].powerfactor);
                     break;
                 case 9:
-                    readings_table[record_count].unknown = atof(dataField);      // Unknown
+                    readings_table[prefill_Data_Table_Pointer].unknown = atof(Field);      // Unknown
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array unknown: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].unknown);
                     break;
                 case 10:
-                    readings_table[record_count].frequency = atof(dataField);    // Frequency
+                    readings_table[prefill_Data_Table_Pointer].frequency = atof(Field);    // Frequency
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array frequency: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].frequency);
                     break;
                 case 11:
-                    readings_table[record_count].temperature = atof(dataField);  // Temperature
+                    readings_table[prefill_Data_Table_Pointer].sensor_temperature = atof(Field);  // Temperature
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array sensor temperature: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].sensor_temperature);
                     break;
                 case 12:
-                    // weather temperature
-                    this_temperature = atof(dataField);                  // weather temperature
+                    readings_table[prefill_Data_Table_Pointer].weather_temperature = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array weather temperature: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].weather_temperature);
                     break;
                 case 13:
-                    // weather pressure
+                    readings_table[prefill_Data_Table_Pointer].temperature_feels_like = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array temperature feels_like: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].temperature_feels_like);
                     break;
                 case 14:
-                    // weather humidity
+                    readings_table[prefill_Data_Table_Pointer].temperature_maximum = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array temperature maximum: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].temperature_maximum);
                     break;
                 case 15:
-                    // weather wind direction
+                    readings_table[prefill_Data_Table_Pointer].temperature_minimum = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array temperature minimum: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].temperature_minimum);
                     break;
                 case 16:
-                    // weather wind speed
+                    readings_table[prefill_Data_Table_Pointer].atmospheric_pressure = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array atmospheric pressure: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].atmospheric_pressure);
                     break;
                 case 17:
-                    // weather description
+                    readings_table[prefill_Data_Table_Pointer].relative_humidity = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array relative humidity: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].relative_humidity);
+                    break;
+                case 18:
+                    readings_table[prefill_Data_Table_Pointer].wind_speed = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array wind speed: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].wind_speed);
+                    break;
+                case 19:
+                    readings_table[prefill_Data_Table_Pointer].wind_direction = atof(Field);
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array wind direction: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].wind_direction);
+                    break;
+                case 20:
+                    strncpy(readings_table[prefill_Data_Table_Pointer].weather_description, Field, sizeof(readings_table[prefill_Data_Table_Pointer].weather_description));
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array weather description: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].weather_description);
+                    break;
+                default:
                     break;
                 }
                 datafieldNo++;
-                dataField[0] = '\0';
-                datacharacter_count = 0;
+                Field[0] = '\0';
+                character_count = 0;
             }
-            if (datatemp == '\n') {                                                             // end of sd data row
-                if (readings_table[record_count].voltage >= highest_voltage) {
-                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-                        time_of_lowest_voltage[i] = readings_table[record_count].ltime[i];
-                    }
-                    highest_voltage = readings_table[record_count].voltage;
-                }
-                if (readings_table[record_count].voltage <= lowest_voltage) {
-                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-                        time_of_lowest_voltage[i] = readings_table[record_count].ltime[i];
-                    }
-                    lowest_voltage = readings_table[record_count].voltage;                     // update the largest current value
-                }
-                if (readings_table[record_count].amperage >= largest_amperage) {                  // load the maximum amperage value
-                    for (i = 0; i <= Data_Time.length() + 1; i++) {                               // load the time
-                        time_of_largest_amperage[i] = readings_table[record_count].ltime[i];
-                    }
-                    largest_amperage = readings_table[record_count].amperage;                     // update the largest current value
-                }
-                //                                                          weather information
-                if (this_temperature >= highest_temperature) {       // update the highest weather temperature
-                    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-                        time_of_highest_temperature[i] = readings_table[record_count].ltime[i];
-                    }
-                    highest_temperature = this_temperature;          // update the highest weather temperature
-                }
-                if (this_temperature <= lowest_temperature) {        // update the lowest weather temperature
-                    for (i = 0; i <= Data_Time.length() + 1; i++) {             // load the time
-                        time_of_lowest_temperature[i] = readings_table[record_count].ltime[i];
-                    }
-                    lowest_temperature = this_temperature;           // update the lowest weather temperature
-                }
-                record_count++;                                                                 // increment array pointer
-                current_data_record_count++;                                                    // increment the current_record count
-                if (record_count > table_size) {                                                // if pointer is greater than table size
-                    for (int i = 0; i < table_size; i++) {                                      // shuffle the rows up, losing row 0, make row [table_size] free
-                        strcpy(readings_table[i].ldate, readings_table[i + 1].ldate);           // date
-                        strcpy(readings_table[i].ltime, readings_table[i + 1].ltime);           // time
-                        readings_table[i].voltage = readings_table[i + 1].voltage;              // voltage
-                        readings_table[i].amperage = readings_table[i + 1].amperage;            // amperage
-                        readings_table[i].wattage = readings_table[i + 1].wattage;              // wattage
-                        readings_table[i].uptime = readings_table[i + 1].uptime;                // up time
-                        readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;    // kilowatt hour
-                        readings_table[i].powerfactor = readings_table[i + 1].powerfactor;      // power factor
-                        readings_table[i].unknown = readings_table[i + 1].unknown;              // unknown
-                        readings_table[i].frequency = readings_table[i + 1].frequency;          // frequency
-                        readings_table[i].temperature = readings_table[i + 1].temperature;      // temperature
-                    }
-                    record_count = table_size;                                                  // subsequent records will be added at the end of the table
+            if (datatemp == '\n') {                                         // at this point the obtained record has been saved in the table
+                // end of sd data row
+                Update_Webpage_Variables_from_Table(readings_table, prefill_Data_Table_Pointer);             // update the web variables with the record just saved
+                prefill_Data_Table_Pointer++;                               // increment the table array pointer
+                Global_Data_Record_Count++;                                 // increment the running record toral 
+                if (prefill_Data_Table_Pointer > data_table_size) {         // if pointer is greater than table size
+                    Shuffle_Data_Table();
+                    prefill_Data_Table_Pointer = data_table_size;
                 }
                 datafieldNo = 1;
-            }
+            } // end of end of line detected
         } // end of while
     }
     dataFile.close();
-    console_message = "Loaded Data Records: " + String(current_data_record_count);
-    Write_Console_Message();
+    Write_Console_Message("Loaded Data Records: " + String(Global_Data_Record_Count));
     SD_Led_Flash_Start_Stop(false);
+}
+void Shuffle_Data_Table() {
+    for (int i = 0; i < data_table_size - 1; i++) {           // shuffle the rows up, losing row 0, make row [table_size] free
+        strncpy(readings_table[i].ldate, readings_table[i + 1].ldate, sizeof(readings_table[i].ldate));                           // [0]  date
+        strncpy(readings_table[i].ltime, readings_table[i + 1].ltime, sizeof(readings_table[i].ltime));                           // [1]  time
+        readings_table[i].voltage = readings_table[i + 1].voltage;                              // [2]  voltage
+        readings_table[i].amperage = readings_table[i + 1].amperage;                            // [3]  amperage
+        readings_table[i].wattage = readings_table[i + 1].wattage;                              // [4]  wattage
+        readings_table[i].uptime = readings_table[i + 1].uptime;                                // [5]  uptime
+        readings_table[i].kilowatthour = readings_table[i + 1].kilowatthour;                    // [6]  kilowatthours
+        readings_table[i].powerfactor = readings_table[i + 1].powerfactor;                      // [7]  power factor
+        readings_table[i].unknown = readings_table[i + 1].unknown;                              // [8]  unknown
+        readings_table[i].frequency = readings_table[i + 1].frequency;                          // [9]  frequency
+        readings_table[i].sensor_temperature = readings_table[i + 1].sensor_temperature;        // [10] sensor temperature
+        readings_table[i].weather_temperature = readings_table[i + 1].weather_temperature;      // [11] weather temperature
+        readings_table[i].temperature_feels_like = readings_table[i + 1].temperature_feels_like;// [12] temperature feels like
+        readings_table[i].temperature_maximum = readings_table[i + 1].temperature_maximum;      // [13] temperature maximum
+        readings_table[i].temperature_minimum = readings_table[i + 1].temperature_minimum;      // [14] temperature minimum
+        readings_table[i].atmospheric_pressure = readings_table[i + 1].atmospheric_pressure;    // [15] atmospheric pressure
+        readings_table[i].relative_humidity = readings_table[i + 1].relative_humidity;          // [16] relative humidity
+        readings_table[i].wind_speed = readings_table[i + 1].wind_speed;                        // [17] wind speed
+        readings_table[i].wind_direction = readings_table[i + 1].wind_direction;                // [18] wind direction
+        strncpy(readings_table[i].weather_description, readings_table[i + 1].weather_description, sizeof(readings_table[i].weather_description));// [19] weather description
+    }
+}
+void Update_Webpage_Variables_from_Data_File_Values(double Data_File_Values[20]) {
+    // highest voltage ------------------------------------------------------------------------------------------------
+    if (Data_File_Values[Voltage] >= highest_voltage) {
+        time_of_highest_voltage = String(Data_File_Values_1);
+        highest_voltage = Data_File_Values[Voltage];                       // update the largest current value
+    }
+    // lowest voltage -------------------------------------------------------------------------------------------------
+    if (lowest_voltage >= Data_File_Values[Voltage]) {
+        time_of_lowest_voltage = String(Data_File_Values_1);
+        //       console.print(millis(), DEC); console.print("\tWrite new data record Data_File_Values_1: "); console.println(time_of_lowest_voltage);
+        lowest_voltage = Data_File_Values[Voltage];                        // update the largest current value
+    }
+    // largest amperage -----------------------------------------------------------------------------------------------    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
+    if (Data_File_Values[Amperage] >= highest_amperage) {
+        time_of_highest_amperage = String(Data_File_Values_1);
+        highest_amperage = Data_File_Values[Amperage];                      // update the largest current value
+    }
+    // highest weather temperature ------------------------------------------------------------------------------------
+    if (Data_File_Values[Weather_Temperature] >= highest_temperature) {           // update the highest weather temperature
+        time_of_highest_temperature = String(Data_File_Values_1);
+        highest_temperature = Data_File_Values[Weather_Temperature];              // update the highest weather temperature
+    }
+    // lowest temperature ---------------------------------------------------------------------------------------------
+    if (Data_File_Values[Weather_Temperature] <= lowest_temperature) {            // update the lowest weather temperature
+        time_of_lowest_temperature = String(Data_File_Values_1);
+        lowest_temperature = Data_File_Values[Weather_Temperature];               // update the lowest weather temperature
+    }
+    time_of_latest_reading = String(Data_File_Values_1);
+    // latest weather temperature -------------------------------------------------------------------------------------
+    latest_weather_temperature = Data_File_Values[Weather_Temperature];           // update the highest weather temperature
+    // latest weather temperature feels like --------------------------------------------------------------------------
+    latest_weather_temperature_feels_like = Data_File_Values[Temperature_Feels_Like];
+    // latest weather temperature maximum -----------------------------------------------------------------------------
+    latest_weather_temperature_maximum = Data_File_Values[Temperature_Maximum];
+    // latest weather temperature minimum -----------------------------------------------------------------------------
+    latest_weather_temperature_minimum = Data_File_Values[Temperature_Minimum];
+    // latest atmospheric pressure ------------------------------------------------------------------------------------
+    latest_atmospheric_pressure = Data_File_Values[Atmospheric_Pressure];
+    // latest relative humidity ---------------------------------------------------------------------------------------
+    latest_relative_humidity = Data_File_Values[Relative_Humidity];
+    // latest wind speed ----------------------------------------------------------------------------------------------
+    latest_wind_speed = Data_File_Values[Wind_Speed];
+    // latest wind direction ------------------------------------------------------------------------------------------
+    latest_wind_direction = Data_File_Values[Wind_Direction];
+    // latest weather description -------------------------------------------------------------------------------------
+    latest_weather_description = String(Data_File_Values_19);
+    // ----------------------------------------------------------------------------------------------------------------
+    SD_freespace_double = (double)SD_freespace / 1000000;
+    if (SD_freespace < critical_SD_freespace) {
+        Write_Console_Message("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+    }
+}
+void Update_Webpage_Variables_from_Table(record_type readings_table[data_table_size], int Data_Table_Pointer) {
+    if (readings_table[Data_Table_Pointer].voltage >= highest_voltage) {
+        time_of_highest_voltage = String(readings_table[Data_Table_Pointer].ltime);
+        highest_voltage = readings_table[Data_Table_Pointer].voltage;
+    }
+    if ((readings_table[Data_Table_Pointer].voltage <= lowest_voltage) || !lowest_voltage) {
+        time_of_lowest_voltage = String(readings_table[Data_Table_Pointer].ltime);
+        //       console.print(millis(), DEC); console.print("\tUpdate Webpage Variables ltime : "); console.println(time_of_lowest_voltage);
+        lowest_voltage = readings_table[Data_Table_Pointer].voltage;                     // update the largest current value
+    }
+    if (readings_table[Data_Table_Pointer].amperage >= highest_amperage) {               // load the maximum amperage value
+        time_of_highest_amperage = String(readings_table[Data_Table_Pointer].ltime);
+        highest_amperage = readings_table[Data_Table_Pointer].amperage;                  // update the largest current value
+    }
+    if (readings_table[Data_Table_Pointer].weather_temperature >= highest_temperature) { // update the highest weather temperature
+        time_of_highest_temperature = String(readings_table[Data_Table_Pointer].ltime);
+        highest_temperature = readings_table[Data_Table_Pointer].weather_temperature;    // update the highest weather temperature
+    }
+    if (readings_table[Data_Table_Pointer].weather_temperature <= lowest_temperature) {  // update the lowest weather temperature
+        time_of_lowest_temperature = String(readings_table[Data_Table_Pointer].ltime);
+        lowest_temperature = readings_table[Data_Table_Pointer].weather_temperature;     // update the highest weather temperature
+    }
+    latest_weather_temperature_feels_like = readings_table[Data_Table_Pointer].temperature_feels_like;
+    latest_weather_temperature_maximum = readings_table[Data_Table_Pointer].temperature_maximum;
+    latest_weather_temperature_minimum = readings_table[Data_Table_Pointer].temperature_minimum;
+    latest_relative_humidity = readings_table[Data_Table_Pointer].relative_humidity;
+    latest_atmospheric_pressure = readings_table[Data_Table_Pointer].atmospheric_pressure;
+    latest_wind_speed = readings_table[Data_Table_Pointer].wind_speed;
+    latest_wind_direction = readings_table[Data_Table_Pointer].wind_direction;
+    latest_weather_description = readings_table[Data_Table_Pointer].weather_description;
 }
 void Prefill_Console_Array() {
     int console_character_count = 0;
     char console_txtField[120];
     int console_fieldNo = 1;
     char console_temp;
-    current_console_record_count = 0;
+    Global_Data_Table_Pointer = 0;
+    Global_Data_Record_Count = 0;
     SD_Led_Flash_Start_Stop(true);
     File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
     if (consoleFile) {
-        console_message = "Loading console file from " + String(ConsoleFileName);
-        Write_Console_Message();
+        Write_Console_Message("Loading console file from " + String(ConsoleFileName));
         while (consoleFile.available()) {                                       // do while there are data available
             Flash_SD_LED();
             console_temp = consoleFile.read();                                  // read a character from the file
@@ -970,16 +1044,16 @@ void Prefill_Console_Array() {
                 }                                                               // insert termination character where the ',' or '\n' was
                 switch (console_fieldNo) {
                 case 1:
-                    strcpy(console_table[console_record_count].ldate, console_txtField);        // Date
+                    strncpy(console_table[Global_Console_Table_Pointer].ldate, console_txtField, sizeof(console_table[Global_Console_Table_Pointer].ldate));        // Date
                     break;
                 case 2:
-                    strcpy(console_table[console_record_count].ltime, console_txtField);        // Time
+                    strncpy(console_table[Global_Console_Table_Pointer].ltime, console_txtField, sizeof(console_table[Global_Console_Table_Pointer].ltime));        // Time
                     break;
                 case 3:
-                    console_table[console_record_count].milliseconds = atof(console_txtField); // milliseconds
+                    console_table[Global_Console_Table_Pointer].milliseconds = atof(console_txtField); // milliseconds
                     break;
                 case 4:
-                    strcpy(console_table[console_record_count].message, console_txtField);      // message
+                    strncpy(console_table[Global_Console_Table_Pointer].message, console_txtField, sizeof(console_table[Global_Console_Table_Pointer].message));      // message
                     break;
                 }
                 console_fieldNo++;
@@ -987,24 +1061,23 @@ void Prefill_Console_Array() {
                 console_character_count = 0;
             }
             if (console_temp == '\n') {                                                         // end of sd data row
-                console_record_count++;                                                         // increment array pointer
-                current_console_record_count++;                                                 // increment the current_record count
-                if (console_record_count > console_table_size) {                                // if pointer is greater than table size
+                Global_Console_Table_Pointer++;                                                         // increment array pointer
+                Global_Console_Record_Count++;                                                 // increment the current_record count
+                if (Global_Console_Table_Pointer > console_table_size) {                                // if pointer is greater than table size
                     for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
-                        strcpy(console_table[i].ldate, console_table[i + 1].ldate);             // date
-                        strcpy(console_table[i].ltime, console_table[i + 1].ltime);             // time
+                        strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
+                        strncpy(console_table[i].ltime, console_table[i + 1].ltime, sizeof(console_table[i].ltime));             // time
                         console_table[i].milliseconds = console_table[i + 1].milliseconds;
-                        strcpy(console_table[i].message, console_table[i + 1].message);
+                        strncpy(console_table[i].message, console_table[i + 1].message, sizeof(console_table[i].message));
                     }
-                    console_record_count = console_table_size;                                                  // subsequent records will be added at the end of the table
+                    Global_Console_Table_Pointer = console_table_size;                                                  // subsequent records will be added at the end of the table
                 }
                 console_fieldNo = 1;
             }
         } // end of while
     }
     consoleFile.close();
-    console_message = "Loaded Console Records: " + String(current_console_record_count);
-    Write_Console_Message();
+    Write_Console_Message("Loaded Console Records: " + String(Global_Console_Record_Count));
     SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
@@ -1025,7 +1098,7 @@ void Display() {
     webpage += F("data.addColumn('timeofday', 'Time');");
     webpage += F("data.addColumn('number', 'Amperage');");
     webpage += F("data.addRows([");
-    for (int i = 0; i < (record_count); i++) {
+    for (int i = 0; i < (Global_Data_Table_Pointer); i++) {
         if (String(readings_table[i].ltime) != "") {                  // if the ltime field contains data
             for (int y = 0; y < 8; y++) {                               // replace the ":"s in ltime with ","
                 if (readings_table[i].ltime[y] == ':') {
@@ -1038,7 +1111,7 @@ void Display() {
             this_amperage = readings_table[i].amperage;
             if (this_amperage > maximum_amperage) maximum_amperage = this_amperage;
             if (this_amperage < minimum_amperage) minimum_amperage = this_amperage;
-            if (i != record_count) webpage += ",";    // do not add a "," to the last record
+            if (i != Global_Data_Table_Pointer) webpage += ",";    // do not add a "," to the last record
         }
     }
     webpage += "]);\n";
@@ -1073,8 +1146,7 @@ void Display() {
     lastcall = "display";
 }
 void Web_Reset() {
-    console_message = "Processor Reset via Web Command";
-    Write_Console_Message();
+    Write_Console_Message("Processor Reset via Web Command");
     ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
@@ -1216,105 +1288,83 @@ void Information() {                                                 // Display 
     webpage += F("'>Date the System was Booted : ");
     webpage += Last_Boot_Date + " at " + Last_Boot_Time;
     webpage += "</span></strong></p>";
-    // ----------------------------------------------------------------------------------------------------------------
+    // Data Record Count ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Number of readings = ");
-    webpage += String(current_data_record_count);
+    webpage += F("'>Number of Data readings = ");
+    webpage += String(Global_Data_Record_Count);
+    webpage += F(" ");
     webpage += "</span></strong></p>";
     // Highest Voltage ------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Highest Voltage was Recorded at ");
-    webpage += String(time_of_highest_voltage) + " : ";
-    webpage += String(highest_voltage) + " volts";
+    webpage += F("'>Highest Voltage was recorded at ");
+    webpage += time_of_highest_voltage + " : " + String(highest_voltage) + " volts";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Lowest Voltage -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Lowest Voltage was Recorded at ");
-    webpage += String(time_of_lowest_voltage) + " : ";
-    webpage += String(lowest_voltage) + " volts";
+    webpage += F(">Lowest Voltage was recorded at ");
+    webpage += time_of_lowest_voltage + " : " + String(lowest_voltage) + " volts";
+    //   console.print(millis(), DEC); console.print("\tInformation time_of_lowest_voltage: "); console.println(time_of_lowest_voltage);
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Greatest Amperage ----------------------------------------------------------------------------------------------
+    // Highest Amperage ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Greatest Amperage was Recorded at ");
-    webpage += String(time_of_largest_amperage) + " : ";
-    webpage += String(largest_amperage) + " A";
+    webpage += F("'>Greatest Amperage was recorded at ");
+    webpage += time_of_highest_amperage + " : " + String(highest_amperage) + " amps";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Weather Latest Temperature -------------------------------------------------------------------------------------
+    // Weather Latest Weather Temperature Feels Like, Maximum & Minimum -----------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Outside Temperature was Recorded at ");
-    webpage += String(time_of_latest_temperature) + " : ";
-    webpage += String(latest_temperature, 2);
+    webpage += F(">Temperature: ");
+    webpage += String(latest_weather_temperature, 2);
+    webpage += F("&deg;C,");
+    webpage += F("  Feels Like: ");
+    webpage += String(latest_weather_temperature_feels_like, 2);
+    webpage += F("&deg;C,");
+    webpage += F("  Maximum: ");
+    webpage += String(latest_weather_temperature_maximum, 2);
+    webpage += F("&deg;C,");
+    webpage += F("  Minimum: ");
+    webpage += String(latest_weather_temperature_minimum, 2);
     webpage += F("&deg;C");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Weather Lowest Temperature -------------------------------------------------------------------------------------
+    // Weather Latest Weather Relative Humidity -----------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Lowest Outside Temperature was Recorded at ");
-    webpage += String(time_of_lowest_temperature) + " : ";
-    webpage += String(lowest_temperature, 2);
-    webpage += F("&deg;C");
+    webpage += F(">Relative Humidity: ");
+    webpage += String(latest_relative_humidity) + "%";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Weather Highest Temperature -------------------------------------------------------------------------------------
+    // Weather Latest Atmospheric Pressure ----------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Highest Outside Temperature was Recorded at ");
-    webpage += String(time_of_highest_temperature) + " : ";
-    webpage += String(highest_temperature, 2);
-    webpage += F("&deg;C");
+    webpage += F(">Atmospheric Pressure: ");
+    webpage += String(latest_atmospheric_pressure) + " millibars";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Weather Humidity -------------------------------------------------------------------------------------
+    // Weather Latest Wind Speed and Direction ------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Relative Humidity Recorded at ");
-    webpage += String(time_of_latest_humidity) + " : ";
-    webpage += String(latest_humidity) + "%";
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Weather Pressure -------------------------------------------------------------------------------------
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Atmospheric Pressure Recorded at ");
-    webpage += String(time_of_latest_pressure) + " : ";
-    webpage += String(latest_pressure) + " millibar";
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Weather -------------------------------------------------------------------------------------
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Weather Description Recorded at ");
-    webpage += String(time_of_latest_weather) + " : ";
-    webpage += String(latest_weather);
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Weather Wind Speed -------------------------------------------------------------------------------------
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Wind Speed Recorded at ");
-    webpage += String(time_of_latest_wind_speed) + " : ";
-    webpage += String(latest_wind_speed) + "m/s";
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Weather Direction -------------------------------------------------------------------------------------
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Latest Wind Direction Recorded at ");
-    webpage += String(time_of_latest_wind_direction) + " : ";
+    webpage += F(">Wind Speed: ");
+    webpage += String(latest_wind_speed) + "m/s,";
+    webpage += F("Direction: ");
     webpage += String(latest_wind_direction);
     webpage += F("&deg;");
     webpage += "</span></strong></p>";
-    //   webpage += F("<p ");
-       // ----------------------------------------------------------------------------------------------------------------
+    webpage += F("<p ");
+    // Weather Latest Weather Description -----------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Weather: ");
+    webpage += String(latest_weather_description);
+    webpage += "</span></strong></p>";
+    // ----------------------------------------------------------------------------------------------------------------
     datafile.close();
     Page_Footer();
     server.send(200, "text/html", webpage);
@@ -1322,8 +1372,6 @@ void Information() {                                                 // Display 
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    //    console_message = "Download of Files Requested via Webpage";
-    //    Write_Console_Message();
     webpage = "";
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
@@ -1337,28 +1385,23 @@ void Download_Files() {
 }
 void Download_File() {                                                          // download the selected file
     String fileName = server.arg("file");
-    console_message = "Download of File " + fileName + " Requested via Webpage";
-    Write_Console_Message();
+    Write_Console_Message("Download of File " + fileName + " Requested via Webpage");
     File datafile = SD.open("/" + fileName, FILE_READ);    // Now read data from FS
     if (datafile) {                                             // if there is a file
         if (datafile.available()) {                             // If data is available and present
             String contentType = "application/octet-stream";
             server.sendHeader("Content-Disposition", "attachment; filename=" + fileName);
             if (server.streamFile(datafile, contentType) != datafile.size()) {
-                console_message = "Sent less data (" + String(server.streamFile(datafile, contentType)) + ")";
-                console_message += " from " + fileName + " than expected (";
-                console_message += String(datafile.size()) + ")";
-                Write_Console_Message();
+                Write_Console_Message("Sent less data (" + String(server.streamFile(datafile, contentType)) + ") from " + fileName + " than expected (" + String(datafile.size()) + ")");
             }
         }
     }
     datafile.close(); // close the file:
     webpage = "";
 }
-void Delete_Files() {                                                           // allow the cliet to select a file for deletion
+void Delete_Files() {                                                           // allow the cliet to select a file for deleti
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    console_message = "Delete Files Requested via Webpage";
-    Write_Console_Message();
+    Write_Console_Message("Delete Files Requested via Webpage");
     webpage = "";
     Page_Header(false, "Energy Monitor Delete Files");
 #ifndef ALLOW_WORKING_FILE_DELETION
@@ -1395,8 +1438,7 @@ void Del_File() {                                                       // web r
     if (fileName != ("/" + DataFileName)) {                            // do not delete the current file
 #endif
         SD.remove(fileName);
-        console_message = DataFileName + " Removed";
-        Write_Console_Message();
+        Write_Console_Message(DataFileName + " Removed");
 #ifndef ALLOW_WORKING_FILE_DELETION
     }
 #endif
@@ -1431,8 +1473,7 @@ void Del_File() {                                                       // web r
     webpage = "";
 }
 void Console_Show() {
-    console_message = "Web Display of Console Messages Requested via Webpage";
-    Write_Console_Message();
+    Write_Console_Message("Web Display of Console Messages Requested via Webpage");
     webpage = "";
     Page_Header(true, "Console Messages");
     for (int x = 0; x < console_table_size; x++) {
@@ -1466,7 +1507,7 @@ int Count_Files_on_SD_Drive() {
             if (datafile) {                                         // if there is a file
                 FileNames[file_count] = filename;
                 //                console_message = "File " + String(file_count) + " filename " + String(filename);
-                //                Write_Console_Message();
+                //                Write_Console_Message(console_message);
                 file_count++;                                       // increment the file count
             }
             datafile.close(); // close the file:
@@ -1480,22 +1521,19 @@ int Count_Files_on_SD_Drive() {
     return (file_count);
 }
 void Wipe_Files() {                            // selected by pressing combonation of buttons
-    console_message = "Start of Wipe Files Request by Switch";
-    Write_Console_Message();
+    Write_Console_Message("Start of Wipe Files Request by Switch");
     String filename;
     File root = SD.open("/");                                       //  Open the root directory
     while (true) {
         File entry = root.openNextFile();                           //  get the next file
         if (entry) {
             filename = entry.name();
-            console_message = "Removing " + filename;
-            Write_Console_Message();
+            Write_Console_Message("Removing " + filename);
             SD.remove(entry.name());                                //  delete the file
         }
         else {
             root.close();
-            console_message = "All files removed from root directory, rebooting";
-            Write_Console_Message();
+            Write_Console_Message("All files removed from root directory, rebooting");
             ESP.restart();
         }
     }
@@ -1509,7 +1547,7 @@ void Send_Request(int field) {
     RS485_Port.write(RS485_Requests[field][7]);
     delay(2);
 }
-double Receive(int field) {
+void Receive(int field) {
     byte pointer = 0;
     byte required_bytes = 0;
     int received_character = 0;
@@ -1521,8 +1559,7 @@ double Receive(int field) {
     do {
         while (!RS485_Port.available()) {                                       // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {                   // no data received within 500 ms so timeout
-                console_message = "No Reply from RS485 within 500 ms";
-                Write_Console_Message();
+                Write_Console_Message("No Reply from RS485 within 500 ms");
                 while (true) {                                                          // wait for reset to be pressed
                     digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                     digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -1586,69 +1623,93 @@ double Receive(int field) {
     } while (pointer < required_bytes);                                        // loop until all the required characters have been received, or timeout
     if (value_status == true) {                                                 // received value is good
         switch (field) {
-        case Voltage: {                                                                                 // Voltage
-            double volts = (value[3] << 8) + value[4];                                                  // Received is number of tenths of volt
-            volts = volts / (double)10;                                                                 // convert to v           
-            return volts;                                                                               // Voltage output format double
+        case 0: {                                                                               // Voltage
+            double voltage = (value[3] << 8) + value[4];                                          // Received is number of tenths of volt
+            voltage = voltage / (double)10;                                                         // convert to volts
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print(millis(), DEC); console.println("\tReceived Data: ");
+            console.print("\t\tReceived Voltage: "); printConsoleDouble(voltage, 6); console.println();
+#endif
+            Data_File_Values[Voltage] = voltage;                               // Voltage output format double
             break;
         }
-        case Amperage: {                                                                                // Amperage
+        case 1: {                                                                                // Amperage
             double amperage = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);       // Received is number of milli amps 
             amperage = amperage / (double)1000;                                                         // convert to amps 0.00n
-            return amperage;                                                                            // Amperage output format double nn.n
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Ampergae: "); printConsoleDouble(amperage, 6); console.println();
+#endif
+            Data_File_Values[Amperage] = amperage;                                                                            // Amperage output format double nn.n
             break;
         }
-        case Wattage: {                                                                                 // Wattage
+        case 2: {                                                                                 // Wattage
             double wattage = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);        // Recieved is number of tenths of watts
             wattage = wattage / (double)10;                                                             // convert to watts
-            return wattage;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Wattage: "); printConsoleDouble(wattage, 6); console.println();
+#endif
+            Data_File_Values[Wattage] = wattage;
             break;
         }
-        case UpTime: {
-            double uptime = (value[3] << 8) + value[4];
+        case 3: {
+            double uptime = (double)(value[3] << 8) + (double)value[4];
             uptime = uptime / (double)60;                                                              // convert to hours
-            return uptime;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Uptime: "); printConsoleDouble(uptime, 6); console.println();
+#endif
+            Data_File_Values[UpTime] = uptime;
             break;
         }
-        case Kilowatthour: {
+        case 4: {
             double kilowatthour = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);
             kilowatthour = kilowatthour / (double)1000;
-            return kilowatthour;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Kilowatthour: "); printConsoleDouble(kilowatthour, 6); console.println();
+#endif
+            Data_File_Values[Kilowatthour] = kilowatthour;
             break;
         }
-        case PowerFactor: {
-            double powerfactor = (value[3] << 8) + value[4];
+        case 5: {
+            double powerfactor = (double)(value[3] << 8) + (double)value[4];
             powerfactor = powerfactor / (double)100;
-            return powerfactor;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Power Factor: "); printConsoleDouble(powerfactor, 6); console.println();
+#endif
+            Data_File_Values[PowerFactor] = powerfactor;
             break;
         }
-        case Unknown: {
+        case 6: {
             double unknown = (value[3] << 8) + value[4];
-            return unknown;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Unknown: "); printConsoleDouble(unknown, 6); console.println();
+#endif
+            Data_File_Values[Unknown] = unknown;
             break;
         }
-        case Frequency: {
-            double frequency = (value[3] * 256) + value[4];
+        case 7: {
+            double frequency = (double)(value[3] * (double)256) + (double)value[4];
             frequency = frequency / (double)10;
-            return frequency;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived frequency: "); printConsoleDouble(frequency, 6); console.println();
+#endif
+            Data_File_Values[Frequency] = frequency;
             break;
         }
-        case Temperature: {
-            double temperature = (value[3] << 8) + value[4];
-            return temperature;
+        case 8: {
+            double temperature = (double)(value[3] << 8) + (double)value[4];
+#ifdef DISPLAY_DATA_VALUES_COLLECTED 
+            console.print("\t\tReceived Temperature: "); printConsoleDouble(temperature, 6); console.println();
+#endif
+            Data_File_Values[Sensor_Temperature] = temperature;
             break;
-        }
-        default: {
         }
         }
     }
-    return (double)0;
 }
 void Check_Green_Switch() {
     Green_Switch.update();
     if (Green_Switch.fell()) {
-        console_message = "Green Button Pressed - No Action Assigned";
-        Write_Console_Message();
+        Write_Console_Message("Green Button Pressed - No Action Assigned");
     }
 }
 void Check_Blue_Switch() {
@@ -1656,8 +1717,7 @@ void Check_Blue_Switch() {
     char SD_led_state = 0;
     Blue_Switch.update();                                                   // update wipe switch
     if (Blue_Switch.fell()) {
-        console_message = "Blue Button Pressed";
-        Write_Console_Message();
+        Write_Console_Message("Blue Button Pressed");
         Running_led_state = digitalRead(Running_led_pin);                   // save the current state of the leds
         SD_led_state = digitalRead(SD_Active_led_pin);
         do {
@@ -1667,8 +1727,7 @@ void Check_Blue_Switch() {
             if (Yellow_Switch.fell()) Yellow_Switch_Pressed = true;         // Blue switch + Yellow switch = wipe directory
             Red_Switch.update();                                            // reset will cancel the Wipe
             if (Red_Switch.fell()) {
-                console_message = "Red Button Pressed";
-                Write_Console_Message();
+                Write_Console_Message("Red Button Pressed");
                 ESP.restart();
             }
             delay(150);
@@ -1677,11 +1736,9 @@ void Check_Blue_Switch() {
             delay(150);
         } while (!Yellow_Switch_Pressed);
         if (Yellow_Switch_Pressed) {
-            console_message = "Yellow Button Pressed";
-            Write_Console_Message();
+            Write_Console_Message("Yellow Button Pressed");
             digitalWrite(SD_Active_led_pin, HIGH);
-            console_message = "Wiping Files";
-            Write_Console_Message();
+            Write_Console_Message("Wiping Files");
             Wipe_Files();                                                   // delete all files on the SD, ReYellow_Switch_Pressed when compete
         }
         digitalWrite(Running_led_pin, Running_led_state);                   // restore the previous state of the leds
@@ -1694,45 +1751,54 @@ void Drive_Running_Led() {
 void Check_Red_Switch() {
     Red_Switch.update();
     if (Red_Switch.fell()) {
-        console_message = "Red Button Pressed";
-        Write_Console_Message();
+        Write_Console_Message("Red Button Pressed");
         ESP.restart();
     }
 }
 void Check_Yellow_Switch() {
     Yellow_Switch.update();
     if (Yellow_Switch.fell()) {
-        console_message = "Yellow Button Pressed";
-        Write_Console_Message();
+        Write_Console_Message("Yellow Button Pressed");
         Yellow_Switch_Pressed = true;
     }
     if (Yellow_Switch.rose()) {
-        console_message = "Yellow Button Released";
-        Write_Console_Message();
+        Write_Console_Message("Yellow Button Released");
         Yellow_Switch_Pressed = false;
     }
     return;
 }
 void Clear_Arrays() {                                           // clear the web arrays of old records
-    for (int x = 0; x < console_table_size; x++) {
+    for (int x = 0; x <= console_table_size; x++) {
         console_table[x].ldate[0] = '0';
         console_table[x].ltime[0] = '0';
         console_table[x].message[0] = '0';
         console_table[x].milliseconds = 0;
     }
-    for (int x = 0; x < table_size; x++) {
+    for (int x = 0; x <= data_table_size; x++) {
         readings_table[x].ldate[0] = '0';
         readings_table[x].ltime[0] = '0';
         readings_table[x].amperage = 0;
         readings_table[x].frequency = 0;
         readings_table[x].kilowatthour = 0;
         readings_table[x].powerfactor = 0;
-        readings_table[x].temperature = 0;
+        readings_table[x].sensor_temperature = 0;
         readings_table[x].unknown = 0;
         readings_table[x].uptime = 0;
         readings_table[x].voltage = 0;
         readings_table[x].wattage = 0;
+        readings_table[x].sensor_temperature = 0;
+        readings_table[x].weather_temperature = 0;
+        readings_table[x].temperature_feels_like = 0;
+        readings_table[x].temperature_maximum = 0;
+        readings_table[x].temperature_minimum = 0;
+        readings_table[x].atmospheric_pressure = 0;
+        readings_table[x].relative_humidity = 0;
+        readings_table[x].wind_speed = 0;
+        readings_table[x].wind_direction = 0;
+        readings_table[x].weather_description[0] = '0';
     }
+    Global_Data_Table_Pointer = 0;
+    Global_Console_Table_Pointer = 0;
 }
 void SD_Led_Flash_Start_Stop(bool state) {
     if (state) {
@@ -1759,13 +1825,12 @@ void Flash_SD_LED() {
 String GetDate(bool format) {
     int connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        console_message = "Attempting to Get Date " + String(connection_attempts);
-        Write_Console_Message();
+        Write_Console_Message("Attempting to Get Date " + String(connection_attempts));
         delay(500);
+        Check_Red_Switch();
         connection_attempts++;
         if (connection_attempts > 20) {
-            console_message = "Time Network Error, Restarting";
-            Write_Console_Message();
+            Write_Console_Message("Time Network Error, Restarting");
             ESP.restart();
         }
     }
@@ -1786,13 +1851,12 @@ String GetDate(bool format) {
 String GetTime(bool format) {
     int connection_attempts = 0;
     while (!getLocalTime(&timeinfo)) {
-        console_message = "Attempting to Get Time " + String(connection_attempts);
-        Write_Console_Message();
+        Write_Console_Message("Attempting to Get Time " + String(connection_attempts));
         delay(500);
+        Check_Red_Switch();                         // see if user wants to abort getting the time before 20 connectio attempts
         connection_attempts++;
         if (connection_attempts > 20) {
-            console_message = "Time Network Error, Restarting";
-            Write_Console_Message();
+            Write_Console_Message("Time Network Error, Restarting");
             ESP.restart();
         }
     }
@@ -1816,7 +1880,7 @@ void printDouble(double val, byte precision) {
     // precision is a number from 0 to 6 indicating the desired decimial places
     // example: printDouble( 3.1415, 2); // prints 3.14 (two decimal places)
 
-    console_message = String(val);  //prints the int part
+    String console_message = String(val);  //prints the int part
     if (precision > 0) {
         console_message += ("."); // print the decimal point
         unsigned long frac;
@@ -1836,7 +1900,31 @@ void printDouble(double val, byte precision) {
             console_message += "0";
         console_message += String(frac);
     }
-    Write_Console_Message();
+    Write_Console_Message(console_message);
+}
+void printConsoleDouble(double val, byte precision) {
+    // prints val with number of decimal places determine by precision
+    // precision is a number from 0 to 6 indicating the desired decimial places
+    // example: printDouble( 3.1415, 2); // prints 3.14 (two decimal places)
+    console.print(val);  //prints the int part
+    if (precision > 0) {
+        console.print("."); // print the decimal point
+        unsigned long frac;
+        unsigned long mult = 1;
+        byte padding = precision - 1;
+        while (precision--)
+            mult *= 10;
+        if (val >= 0)
+            frac = (val - int(val)) * mult;
+        else
+            frac = (int(val) - val) * mult;
+        unsigned long frac1 = frac;
+        while (frac1 /= 10)
+            padding--;
+        while (padding--)
+            console.print("0");
+        console.print(frac);
+    }
 }
 void SDprintDouble(double val, byte precision) {
     Datafile.print(int(val));  //prints the int part
@@ -1861,52 +1949,95 @@ void SDprintDouble(double val, byte precision) {
     }
 }
 void Parse_Weather_Info(String payload) {
-    //   console.println(payload);
-       // Temperature ----------------------------------------------------------------------------------------------------
-    int temp_start = payload.indexOf("temp\":");                        // "temp":272.77,
-    temp_start = payload.indexOf(":", temp_start);
-    int temp_end = payload.indexOf(",", temp_start);
-    parse(payload, temp_start, temp_end);
-    weather_record.temp = (double)(atof(Parse_Output)) - (double)273.15;
-    // Pressure -------------------------------------------------------------------------------------------------------
-    int pressure_start = payload.indexOf("pressure\":");        // "pressure":1007,
-    pressure_start = payload.indexOf(":", pressure_start);
-    int pressure_end = payload.indexOf(",", pressure_start);
-    parse(payload, pressure_start, pressure_end);
-    weather_record.pressure = (int)atof(Parse_Output);
-    // humidity -------------------------------------------------------------------------------------------------------
-    int humidity_start = payload.indexOf("humidity\":");        // "humidity":95}
-    humidity_start = payload.indexOf(":", humidity_start);
-    int humidity_end = payload.indexOf("}", humidity_start);
-    parse(payload, humidity_start, humidity_end);
-    weather_record.humidity = (int)atof(Parse_Output);
-    // weather description --------------------------------------------------------------------------------------------
-    int weather_start = payload.indexOf("main");            // "weather" : [{"id":701, "main" : "Mist", "description":"mist", "icon" : "50n"}] ,
-    weather_start = payload.indexOf(":", weather_start);            // "description":"clear sky","icon"
-    weather_start = weather_start + 2;
-    int weather_end = payload.indexOf("\"", weather_start);
-    parse(payload, weather_start - 1, weather_end);
-    weather_record.weather = String(Parse_Output);
-    // wind speed -----------------------------------------------------------------------------------------------------
-    int wins_start = payload.indexOf("speed");                       // "speed":2.57,
-    wins_start = payload.indexOf(":", wins_start);
-    int wins_end = payload.indexOf(",", wins_start);
-    parse(payload, wins_start, wins_end);
-    weather_record.wind_speed = (double)(atof(Parse_Output));
-    // wind direction -------------------------------------------------------------------------------------------------
-    int wind_start = payload.indexOf("deg");                         // "deg":20
-    wind_start = payload.indexOf(":", wind_start);
-    int wind_end = payload.indexOf("}", wind_start);
-    parse(payload, wind_start, wind_end);
-    weather_record.wind_direction = (int)atof(Parse_Output);
-#ifdef DISPLAY_WEATHER_INFORMATION
+    /*
+    {"coord":{"lon":-1.0871,"lat":51.2625},
+    "weather":[{"id":804,"main":"Clouds",
+    "description":"overcast clouds",
+    "icon":"04n"}],"base":"stations","main":{
+    "temp":284.12,
+    "feels_like":283.47,
+    "temp_min":282.75,
+    "temp_max":284.89,
+    "pressure":1018,
+    "humidity":84},
+    "visibility":10000,"wind":{
+    "speed":8.23,
+    "deg":260},
+    "clouds":{"all":100},"dt":1672864004,"sys":{"type":2,"id":2016598,
+    "country":"GB","sunrise":1672819699,"sunset":1672848573},
+    "timezone":0,"id":2656192,"name":"Basingstoke","cod":200}
+    */
+    int start = 0;
+    int end = 0;
+#ifdef DISPLAY_DATA_VALUES_COLLECTED
+    console.print(millis(), DEC); console.println("\tRaw Weather Record:");
     console.println(payload);
-    console.print("Parsed Temperature: "); console.println(weather_record.temp, DEC);
-    console.print("Parsed Pressure: "); console.println(weather_record.pressure, DEC);
-    console.print("Parsed Humidity: "); console.println(weather_record.humidity, DEC);
-    console.print("Parsed Wind Direction: "); console.println(weather_record.wind_direction, DEC);
-    console.print("Parsed Wind Speed: "); console.println(weather_record.wind_speed, DEC);
-    console.print("Parsed Description: "); console.println(weather_record.weather);
+#endif
+    // Temperature ----------------------------------------------------------------------------------------------------
+    start = payload.indexOf("temp\":");                 // "temp":272.77,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Weather_Temperature] = (double)(atof(Parse_Output)) - (double)273.15;
+    // Temperature Feels Like -----------------------------------------------------------------------------------------
+    start = payload.indexOf("feels_like");              // "feels_like":283.47,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Temperature_Feels_Like] = (double)(atof(Parse_Output)) - (double)273.15;
+    // Temperature Maximum --------------------------------------------------------------------------------------------
+    start = payload.indexOf("temp_max");                // "temp_max":284.89,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Temperature_Maximum] = (double)(atof(Parse_Output)) - (double)273.15;
+    // Temperature Minimum --------------------------------------------------------------------------------------------
+    start = payload.indexOf("temp_min");                // "temp_min":282.75,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Temperature_Minimum] = (double)(atof(Parse_Output)) - (double)273.15;
+    // Pressure -------------------------------------------------------------------------------------------------------
+    start = payload.indexOf("pressure");                // "pressure":1018,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Atmospheric_Pressure] = (double)atof(Parse_Output);
+    // humidity -------------------------------------------------------------------------------------------------------
+    start = payload.indexOf("humidity\":");             // "humidity":95}
+    start = payload.indexOf(":", start);
+    end = payload.indexOf("}", start);
+    parse(payload, start, end);
+    Data_File_Values[Relative_Humidity] = (double)atof(Parse_Output);
+    // weather description --------------------------------------------------------------------------------------------
+    start = payload.indexOf("description");             // "description":"overcast clouds",
+    start = (payload.indexOf(":", start) + 1);
+    end = (payload.indexOf(",", start) - 1);
+    parse(payload, start, end);
+    Data_File_Values_19 = Parse_Output;
+    // wind speed -----------------------------------------------------------------------------------------------------
+    start = payload.indexOf("speed");                       // "speed":2.57,
+    start = payload.indexOf(":", start);
+    end = payload.indexOf(",", start);
+    parse(payload, start, end);
+    Data_File_Values[Wind_Speed] = (double)(atof(Parse_Output));
+    // wind direction -------------------------------------------------------------------------------------------------
+    start = payload.indexOf("deg");                         // "deg":20
+    start = payload.indexOf(":", start);
+    end = payload.indexOf("}", start);
+    parse(payload, start, end);
+    Data_File_Values[Wind_Direction] = (double)atof(Parse_Output);
+#ifdef DISPLAY_WEATHER_INFORMATION
+    console.print("Parsed Weather Temperature: "); console.println(Data_File_Values[Weather_Temperature], DEC);
+    console.print("Parsed Temperature Feels Like: "); console.println(Data_File_Values[Temperature_Feels_Like], DEC);
+    console.print("Parsed Temperature Maximum: "); console.println(Data_File_Values[Temperature_Maximum], DEC);
+    console.print("Parsed Temperature Minimum: "); console.println(Data_File_Values[Temperature_Minimum], DEC);
+    console.print("Parsed Atmospheric Pressure: "); console.println(Data_File_Values[Atmospheric_Pressure], DEC);
+    console.print("Parsed Relative Humidity: "); console.println(Data_File_Values[Relative_Humidity], DEC);
+    console.print("Parsed Wind Direction: "); console.println(Data_File_Values[Wind_Direction], DEC);
+    console.print("Parsed Wind Speed: "); console.println(Data_File_Values[Wind_Speed], DEC);
+    console.print("Parsed Weather Description: "); console.println(Data_File_Values_19);
+    while (1);
 #endif
 }
 void parse(String payload, int start, int end) {
@@ -1916,3 +2047,33 @@ void parse(String payload, int start, int end) {
     }
     Parse_Output[ptr] = '\0';
 }
+/* Stack Size ---------------------------------------------------------------------------------------------------------
+    The value returned is the high water mark in words.
+    for example,
+    on a 32 bit machine a return value of 1 would indicate that 4 bytes of stack were unused.
+    If the return value is zero then the task has likely overflowed its stack.
+    If the return value is close to zero then the task has come close to overflowing its stack.
+
+unsigned int Stack_Size(void* pvParameters) {
+    console.print(millis(), DEC); console.print("\tStack highwater mark: ");
+    console.print(uxTaskGetStackHighWaterMark(NULL));
+}
+// -----------------------------------------------------------------------------------------------------------------------
+  void* SpStart = NULL;
+  StackPtrAtStart = (void *)&SpStart;
+  watermarkStart =  uxTaskGetStackHighWaterMark(NULL);
+  StackPtrEnd = StackPtrAtStart - watermarkStart;
+
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.printf("\r\n\r\nAddress of Stackpointer near start is:  %p \r\n",  (void *)StackPtrAtStart);
+  Serial.printf("End of Stack is near: %p \r\n",  (void *)StackPtrEnd);
+  Serial.printf("Free Stack near start is:  %d \r\n",  (uint32_t)StackPtrAtStart - (uint32_t)StackPtrEnd);
+
+
+
+
+
+
+*/
