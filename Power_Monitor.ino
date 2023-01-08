@@ -169,7 +169,7 @@ String Data_File_Field_Names[20] = {
                         "Weather Description"       // [19]
 };
 String FileNames[50];
-String Data_File_Values_0 = "1951/11/18";       // Date
+String Data_File_Values_0 = "0000/00/00";       // Date
 String Data_File_Values_1 = "00:00:00";         // Time;
 double Data_File_Values[20] = {
                         0.0,            // [0]  dummy date 
@@ -234,18 +234,15 @@ record_type readings_table[data_table_size + 1];
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double lowest_voltage = 0;
 String time_of_lowest_voltage = "00:00:00";
+String date_of_lowest_voltage = "0000/00/00";
 // Highest Voltage ----------------------------------------------------------------------------------------------------
 double highest_voltage = 0;
 String time_of_highest_voltage = "00:00:00";
+String date_of_highest_voltage = "0000/00/00";
 // Highest amperage ---------------------------------------------------------------------------------------------------
 double highest_amperage = 0;
 String time_of_highest_amperage = "00:00:00";
-// Lowest Temperature -------------------------------------------------------------------------------------------------
-double lowest_temperature = 0;
-String time_of_lowest_temperature = "00:00:00";
-// Highest Temperature ------------------------------------------------------------------------------------------------
-double highest_temperature = 0;
-String time_of_highest_temperature = "00:00:00";
+String date_of_highest_amperage = "0000/00/00";
 // Time of Latest Weather Reading -------------------------------------------------------------------------------------
 String time_of_latest_reading = "00:00:00";
 // Latest Weather Temperature -----------------------------------------------------------------------------------------
@@ -422,6 +419,15 @@ void loop() {
     Check_Green_Switch();                                   // check if start switch has been pressed
     Check_Blue_Switch();                                    // check if wipesd switch has been pressed
     Drive_Running_Led();                                    // on when started, flashing when not, flashing with SD led if waiting for reset
+    if (This_Date != GetDate(false) && New_Day_File_Required == true) {
+        Create_New_Data_File();                             // so create a new Data File with new file name
+        Create_New_Console_File();
+        //        Clear_Arrays();
+        New_Day_File_Required = false;
+    }
+    else {
+        New_Day_File_Required = true;                       // reset the flag
+    }
     server.handleClient();                                  // handle any messages from the website
     if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
         last_cycle = millis();                            // update the last read milli second reading
@@ -448,15 +454,6 @@ void loop() {
         // sensor end ---------------------------------------------------------------------------------------------
         Data_File_Values_0 = GetDate(true);                     // get the date of the reading
         Data_File_Values_1 = GetTime(true);                     // get the time of the reading
-        if (This_Date != GetDate(false) && New_Day_File_Required == true) {
-            Create_New_Data_File();                             // so create a new Data File with new file name
-            Create_New_Console_File();
-            Clear_Arrays();
-            New_Day_File_Required = false;
-        }
-        else {
-            New_Day_File_Required = true;                       // reset the flag
-        }
         Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
         Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
     }                                                           // end of if millis >5000
@@ -613,7 +610,7 @@ void Create_New_Console_File() {
         Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + String(millis()) + ",Console File Started");
         Consolefile.close();
         Consolefile.flush();
-        Global_Console_Table_Pointer = 1;
+        //        Global_Console_Table_Pointer = 1;
     }
     else {
         Write_Console_Message("Console File " + String(ConsoleFileName) + " already exists");
@@ -642,7 +639,7 @@ void Create_New_Data_File() {
         Datafile.println(Data_File_Field_Names[19]);
         Datafile.close();
         Datafile.flush();
-        Global_Data_Table_Pointer = 0;
+        //        Global_Data_Table_Pointer = 0;
         digitalWrite(SD_Active_led_pin, LOW);
         This_Date = GetDate(false);                                 // update the current date
         Write_Console_Message("Data File Created " + DataFileName);
@@ -942,29 +939,21 @@ void Shuffle_Data_Table() {
 void Update_Webpage_Variables_from_Data_File_Values(double Data_File_Values[20]) {
     // highest voltage ------------------------------------------------------------------------------------------------
     if (Data_File_Values[Voltage] >= highest_voltage) {
+        date_of_highest_voltage = String(Data_File_Values_0);
         time_of_highest_voltage = String(Data_File_Values_1);
         highest_voltage = Data_File_Values[Voltage];                       // update the largest current value
     }
     // lowest voltage -------------------------------------------------------------------------------------------------
     if (lowest_voltage >= Data_File_Values[Voltage]) {
+        date_of_lowest_voltage = String(Data_File_Values_0);
         time_of_lowest_voltage = String(Data_File_Values_1);
-        //       console.print(millis(), DEC); console.print("\tWrite new data record Data_File_Values_1: "); console.println(time_of_lowest_voltage);
         lowest_voltage = Data_File_Values[Voltage];                        // update the largest current value
     }
     // largest amperage -----------------------------------------------------------------------------------------------    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
     if (Data_File_Values[Amperage] >= highest_amperage) {
+        date_of_highest_amperage = String(Data_File_Values_0);
         time_of_highest_amperage = String(Data_File_Values_1);
         highest_amperage = Data_File_Values[Amperage];                      // update the largest current value
-    }
-    // highest weather temperature ------------------------------------------------------------------------------------
-    if (Data_File_Values[Weather_Temperature] >= highest_temperature) {           // update the highest weather temperature
-        time_of_highest_temperature = String(Data_File_Values_1);
-        highest_temperature = Data_File_Values[Weather_Temperature];              // update the highest weather temperature
-    }
-    // lowest temperature ---------------------------------------------------------------------------------------------
-    if (Data_File_Values[Weather_Temperature] <= lowest_temperature) {            // update the lowest weather temperature
-        time_of_lowest_temperature = String(Data_File_Values_1);
-        lowest_temperature = Data_File_Values[Weather_Temperature];               // update the lowest weather temperature
     }
     time_of_latest_reading = String(Data_File_Values_1);
     // latest weather temperature -------------------------------------------------------------------------------------
@@ -993,25 +982,20 @@ void Update_Webpage_Variables_from_Data_File_Values(double Data_File_Values[20])
 }
 void Update_Webpage_Variables_from_Table(record_type readings_table[data_table_size], int Data_Table_Pointer) {
     if (readings_table[Data_Table_Pointer].voltage >= highest_voltage) {
+        date_of_highest_voltage = String(readings_table[Data_Table_Pointer].ldate);
         time_of_highest_voltage = String(readings_table[Data_Table_Pointer].ltime);
         highest_voltage = readings_table[Data_Table_Pointer].voltage;
     }
     if ((readings_table[Data_Table_Pointer].voltage <= lowest_voltage) || !lowest_voltage) {
+        date_of_lowest_voltage = String(readings_table[Data_Table_Pointer].ldate);
         time_of_lowest_voltage = String(readings_table[Data_Table_Pointer].ltime);
         //       console.print(millis(), DEC); console.print("\tUpdate Webpage Variables ltime : "); console.println(time_of_lowest_voltage);
         lowest_voltage = readings_table[Data_Table_Pointer].voltage;                     // update the largest current value
     }
     if (readings_table[Data_Table_Pointer].amperage >= highest_amperage) {               // load the maximum amperage value
+        date_of_highest_amperage = String(readings_table[Data_Table_Pointer].ldate);
         time_of_highest_amperage = String(readings_table[Data_Table_Pointer].ltime);
         highest_amperage = readings_table[Data_Table_Pointer].amperage;                  // update the largest current value
-    }
-    if (readings_table[Data_Table_Pointer].weather_temperature >= highest_temperature) { // update the highest weather temperature
-        time_of_highest_temperature = String(readings_table[Data_Table_Pointer].ltime);
-        highest_temperature = readings_table[Data_Table_Pointer].weather_temperature;    // update the highest weather temperature
-    }
-    if (readings_table[Data_Table_Pointer].weather_temperature <= lowest_temperature) {  // update the lowest weather temperature
-        time_of_lowest_temperature = String(readings_table[Data_Table_Pointer].ltime);
-        lowest_temperature = readings_table[Data_Table_Pointer].weather_temperature;     // update the highest weather temperature
     }
     latest_weather_temperature_feels_like = readings_table[Data_Table_Pointer].temperature_feels_like;
     latest_weather_temperature_maximum = readings_table[Data_Table_Pointer].temperature_maximum;
@@ -1287,33 +1271,35 @@ void Information() {                                                 // Display 
     webpage += Last_Boot_Date + " at " + Last_Boot_Time;
     webpage += "</span></strong></p>";
     // Data Record Count ----------------------------------------------------------------------------------------------
+    double Percentage = (Global_Data_Record_Count * (double)100) / (double)17280;
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Number of Data Readings: ");
     webpage += String(Global_Data_Record_Count);
-    webpage += F(", Number of Console Entries: ");
+    webpage += F(" (");
+    webpage += String(Percentage, 0);
+    webpage += F("%), Number of Console Entries: ");
     webpage += String(Global_Console_Record_Count);
     webpage += "</span></strong></p>";
     // Highest Voltage ------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Highest Voltage was recorded at ");
-    webpage += time_of_highest_voltage + " : " + String(highest_voltage) + " volts";
+    webpage += F("'>Highest Voltage was recorded on ");
+    webpage += date_of_highest_voltage + " at " + time_of_highest_voltage + " as " + String(highest_voltage) + " volts";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Lowest Voltage -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F(">Lowest Voltage was recorded at ");
-    webpage += time_of_lowest_voltage + " : " + String(lowest_voltage) + " volts";
-    //   console.print(millis(), DEC); console.print("\tInformation time_of_lowest_voltage: "); console.println(time_of_lowest_voltage);
+    webpage += F(">Lowest Voltage was recorded on ");
+    webpage += date_of_lowest_voltage + " at " + time_of_lowest_voltage + " as " + String(lowest_voltage) + " volts";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Highest Amperage ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
-    webpage += F("'>Greatest Amperage was recorded at ");
-    webpage += time_of_highest_amperage + " : " + String(highest_amperage) + " amps";
+    webpage += F("'>Greatest Amperage was recorded on ");
+    webpage += date_of_highest_amperage + " at " + time_of_highest_amperage + " as " + String(highest_amperage) + " amps";
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Latest Weather Temperature Feels Like, Maximum & Minimum -----------------------------------------------
