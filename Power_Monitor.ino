@@ -18,8 +18,9 @@ Change Record
 28/12/2022  9.10 Attempt to recover network if lost (up to 20 attempts = 10 seconds
 30/12/2022  9.11 Added autoscaling to web chart display
 06/01/2023  10.0 Radical rewrite of Data handling
+09/01/2023  10.1 Bug Fix
 */
-String version = "V10.0";                       // software version number, shown on webpage
+String version = "V10.1";                       // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
 //#define DISPLAY_DATA_VALUES_COLLECTED         // print the data values as they are collected
@@ -420,6 +421,8 @@ void loop() {
     Check_Blue_Switch();                                    // check if wipesd switch has been pressed
     Drive_Running_Led();                                    // on when started, flashing when not, flashing with SD led if waiting for reset
     if (This_Date != GetDate(false) && New_Day_File_Required == true) {
+        Write_Console_Message("This Date:" + (This_Date)+" Now Date: " + GetDate(false) + "New_Day_File_Required:" + String(New_Day_File_Required));
+        Write_Console_Message("New Day Process Commenced");
         Create_New_Data_File();                             // so create a new Data File with new file name
         Create_New_Console_File();
         //        Clear_Arrays();
@@ -429,12 +432,12 @@ void loop() {
         New_Day_File_Required = true;                       // reset the flag
     }
     server.handleClient();                                  // handle any messages from the website
-    if (millis() > last_cycle + (unsigned long)5000) {    // send requests every 5 seconds (5000 millisecods)
-        last_cycle = millis();                            // update the last read milli second reading
+    if (millis() > last_cycle + (unsigned long)5000) {      // send requests every 5 seconds (5000 millisecods)
+        last_cycle = millis();                              // update the last read milli second reading
         // weather start ------------------------------------------------------------------------------------------
         HTTPClient http;
-        http.begin(complete_weather_api_link);                           // start the weather connectio
-        int httpCode = http.GET();                              // send the request
+        http.begin(complete_weather_api_link);              // start the weather connectio
+        int httpCode = http.GET();                          // send the request
         if (httpCode > 0) {
             if (httpCode == HTTP_CODE_OK) {
                 String payload = http.getString();
@@ -610,6 +613,8 @@ void Create_New_Console_File() {
         Consolefile.println(GetDate(true) + "," + GetTime(true) + "," + String(millis()) + ",Console File Started");
         Consolefile.close();
         Consolefile.flush();
+        Write_Console_Message("Console File " + String(ConsoleFileName) + " created");
+        Global_Console_Record_Count = 1;
         //        Global_Console_Table_Pointer = 1;
     }
     else {
@@ -639,10 +644,11 @@ void Create_New_Data_File() {
         Datafile.println(Data_File_Field_Names[19]);
         Datafile.close();
         Datafile.flush();
+        Global_Data_Record_Count = 0;
         //        Global_Data_Table_Pointer = 0;
         digitalWrite(SD_Active_led_pin, LOW);
         This_Date = GetDate(false);                                 // update the current date
-        Write_Console_Message("Data File Created " + DataFileName);
+        Write_Console_Message("Data File " + DataFileName + " created");
     }
     else {
         Write_Console_Message("Data File " + String(DataFileName) + " already exists");
@@ -707,10 +713,11 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
             console_message[x] = temp_message[x];
         }
     }
+    Global_Console_Record_Count++;
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
 }
 void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned long milliseconds, String console_message) {
-    if (Global_Data_Table_Pointer > console_table_size) {                           // table full, shuffle fifo
+    if (Global_Console_Table_Pointer > console_table_size) {                           // table full, shuffle fifo
         for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
             strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
             strncpy(console_table[i].ltime, console_table[i + 1].ltime, sizeof(console_table[i].ltime));             // time
@@ -721,16 +728,17 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned
         strncpy(console_table[console_table_size].ldate, date.c_str(), sizeof(console_table[console_table_size].ldate));
         strncpy(console_table[console_table_size].ltime, time.c_str(), sizeof(console_table[console_table_size].ltime));
         console_table[console_table_size].milliseconds = milliseconds;
-        strncpy(console_table[console_table_size].message, console_message.c_str(), sizeof(console_table[console_table_size].message));   // write the new message onto the end of the table
+        strncpy(console_table[console_table_size].message, console_message.c_str(), sizeof(console_table[console_table_size].message));
+        Global_Console_Table_Pointer = console_table_size;                     // write the new message onto the end of the table
     }
     else {                                                                      // add the record to the table
         strncpy(console_table[Global_Console_Table_Pointer].ldate, date.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ldate));
         strncpy(console_table[Global_Console_Table_Pointer].ltime, time.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ltime));
         console_table[Global_Console_Table_Pointer].milliseconds = milliseconds;
         strncpy(console_table[Global_Console_Table_Pointer].message, console_message.c_str(), sizeof(console_table[Global_Console_Table_Pointer].message));      // write the new message onto the end of the table
+        Global_Console_Table_Pointer++;                                                     // increment the table pointer
     }
     Global_Console_Table_Pointer++;                                             // increment the console table pointer
-    Global_Console_Record_Count++;                                              // increment the console record count
 }
 void Check_WiFi() {
     if (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
@@ -775,6 +783,7 @@ void Prefill_Array() {
     Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
     Write_Console_Message("Loading datafile from " + String(DataFileName));
+    console.print(millis(), DEC); console.print("\t");
     File dataFile = SD.open("/" + DataFileName, FILE_READ);
     if (dataFile) {
         while (dataFile.available()) {                                           // throw the first row, column headers, away
@@ -899,7 +908,13 @@ void Prefill_Array() {
                 // end of sd data row
                 Update_Webpage_Variables_from_Table(readings_table, prefill_Data_Table_Pointer);             // update the web variables with the record just saved
                 prefill_Data_Table_Pointer++;                               // increment the table array pointer
-                Global_Data_Record_Count++;                                 // increment the running record toral 
+                Global_Data_Record_Count++;                                 // increment the running record toral
+                console.print(".");
+                if ((Global_Data_Record_Count % 400) == 0) {
+                    console.print(" ("); console.print(Global_Data_Record_Count); console.println(")");
+                    console.print(millis(), DEC);
+                    console.print("\t");
+                }
                 if (prefill_Data_Table_Pointer > data_table_size) {         // if pointer is greater than table size
                     Shuffle_Data_Table();
                     prefill_Data_Table_Pointer = data_table_size;
@@ -909,6 +924,7 @@ void Prefill_Array() {
         } // end of while
     }
     dataFile.close();
+    console.print(" ("); console.print(Global_Data_Record_Count); console.println(")");
     Write_Console_Message("Loaded Data Records: " + String(Global_Data_Record_Count));
     SD_Led_Flash_Start_Stop(false);
 }
@@ -939,23 +955,42 @@ void Shuffle_Data_Table() {
 void Update_Webpage_Variables_from_Data_File_Values(double Data_File_Values[20]) {
     // highest voltage ------------------------------------------------------------------------------------------------
     if (Data_File_Values[Voltage] >= highest_voltage) {
-        date_of_highest_voltage = String(Data_File_Values_0);
-        time_of_highest_voltage = String(Data_File_Values_1);
+        date_of_highest_voltage = Data_File_Values_0;
+        time_of_highest_voltage = Data_File_Values_1;
         highest_voltage = Data_File_Values[Voltage];                       // update the largest current value
     }
+    else {
+        if (date_of_highest_voltage == "") {
+            date_of_highest_voltage = Data_File_Values_0;
+            time_of_highest_voltage = Data_File_Values_1;
+        }
+    }
+
     // lowest voltage -------------------------------------------------------------------------------------------------
     if (lowest_voltage >= Data_File_Values[Voltage]) {
-        date_of_lowest_voltage = String(Data_File_Values_0);
-        time_of_lowest_voltage = String(Data_File_Values_1);
+        date_of_lowest_voltage = Data_File_Values_0;
+        time_of_lowest_voltage = Data_File_Values_1;
         lowest_voltage = Data_File_Values[Voltage];                        // update the largest current value
+    }
+    else {
+        if (date_of_lowest_voltage == "") {
+            date_of_lowest_voltage = Data_File_Values_0;
+            time_of_lowest_voltage = Data_File_Values_1;
+        }
     }
     // largest amperage -----------------------------------------------------------------------------------------------    if (Data_Values[1] >= largest_amperage) {                  // load the maximum amperage value
     if (Data_File_Values[Amperage] >= highest_amperage) {
-        date_of_highest_amperage = String(Data_File_Values_0);
-        time_of_highest_amperage = String(Data_File_Values_1);
+        date_of_highest_amperage = Data_File_Values_0;
+        time_of_highest_amperage = Data_File_Values_1;
         highest_amperage = Data_File_Values[Amperage];                      // update the largest current value
     }
-    time_of_latest_reading = String(Data_File_Values_1);
+    else {
+        if (date_of_highest_amperage == "") {
+            date_of_highest_amperage = Data_File_Values_0;
+            time_of_highest_amperage = Data_File_Values_1;
+        }
+    }
+    time_of_latest_reading = Data_File_Values_1;
     // latest weather temperature -------------------------------------------------------------------------------------
     latest_weather_temperature = Data_File_Values[Weather_Temperature];           // update the highest weather temperature
     // latest weather temperature feels like --------------------------------------------------------------------------
@@ -1014,8 +1049,9 @@ void Prefill_Console_Array() {
     Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);
     File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
+    Write_Console_Message("Loading console file from " + String(ConsoleFileName));
     if (consoleFile) {
-        Write_Console_Message("Loading console file from " + String(ConsoleFileName));
+        console.print(millis(), DEC); console.print("\t");
         while (consoleFile.available()) {                                       // do while there are data available
             Flash_SD_LED();
             console_temp = consoleFile.read();                                  // read a character from the file
@@ -1045,6 +1081,12 @@ void Prefill_Console_Array() {
             if (console_temp == '\n') {                                                         // end of sd data row
                 Global_Console_Table_Pointer++;                                                         // increment array pointer
                 Global_Console_Record_Count++;                                                 // increment the current_record count
+                console.print(".");
+                if ((Global_Console_Record_Count % 400) == 0) {
+                    console.print(" ("); console.print(Global_Console_Record_Count); console.println(")");
+                    console.print(millis(), DEC);
+                    console.print("\t");
+                }
                 if (Global_Console_Table_Pointer > console_table_size) {                                // if pointer is greater than table size
                     for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
                         strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
@@ -1059,14 +1101,15 @@ void Prefill_Console_Array() {
         } // end of while
     }
     consoleFile.close();
+    console.print(" ("); console.print(Global_Console_Record_Count); console.println(")");
     Write_Console_Message("Loaded Console Records: " + String(Global_Console_Record_Count));
     SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
-    webpage = "";
     double maximum_amperage = 0;
     double minimum_amperage = 0;
     double this_amperage = 0;
+    Write_Console_Message("Web Display of Graph Requested via Webpage");
     Page_Header(true, "Energy Usage Monitor");
     // <script> -------------------------------------------------------------------------------------------------------
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
@@ -1123,15 +1166,15 @@ void Display() {
     // </script> ------------------------------------------------------------------------------------------------------
     webpage += F("<div id='line_chart' style='width:960px; height:600px'></div>");
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
     lastcall = "display";
 }
 void Web_Reset() {
-    Write_Console_Message("Processor Reset via Web Command");
+    Write_Console_Message("Web Reset of Processor Requested via Webpage");
     ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
+    webpage.reserve(5000);
+    webpage = "";
     webpage = "<!DOCTYPE html><head>";
     // <html start -----------------------------------------------------------------------------------------------------
     webpage += F("<html");                                                                  // start of HTML section
@@ -1214,10 +1257,17 @@ void Page_Footer() {
     webpage += F("</body>");
     // </html> end ----------------------------------------------------------------------------------------------------
     webpage += F("</html>");
+    server.send(200, "text/html", webpage);
+    webpage = "";
 }
 void Information() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    webpage = ""; // don't delete this command, it ensures the server works reliably!
+    Write_Console_Message("Web Display of Information Requested via Webpage");
+    String ht = String(date_of_highest_voltage + " at " + time_of_highest_voltage + " as " + String(highest_voltage) + " volts");
+    //    console.print(millis(), DEC); console.print("\tHT String: "); console.println(ht);
+    String lt = String(date_of_lowest_voltage + " at " + time_of_lowest_voltage + " as " + String(lowest_voltage) + " volts");
+    //    console.print(millis(), DEC); console.print("\tLT String: "); console.println(lt);
+    String ha = String(date_of_highest_amperage + " at " + time_of_highest_amperage + " as " + String(highest_amperage) + " amps");
     Page_Header(true, "Energy Monitor Information");
     File datafile = SD.open("/" + DataFileName, FILE_READ);  // Now read data from FS
     // Wifi Signal Strength -------------------------------------------------------------------------------------------
@@ -1285,21 +1335,21 @@ void Information() {                                                 // Display 
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Highest Voltage was recorded on ");
-    webpage += date_of_highest_voltage + " at " + time_of_highest_voltage + " as " + String(highest_voltage) + " volts";
+    webpage += ht;
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Lowest Voltage -------------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F(">Lowest Voltage was recorded on ");
-    webpage += date_of_lowest_voltage + " at " + time_of_lowest_voltage + " as " + String(lowest_voltage) + " volts";
+    webpage += lt;
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Highest Amperage ----------------------------------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
     webpage += F("'>Greatest Amperage was recorded on ");
-    webpage += date_of_highest_amperage + " at " + time_of_highest_amperage + " as " + String(highest_amperage) + " amps";
+    webpage += ha;
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Weather Latest Weather Temperature Feels Like, Maximum & Minimum -----------------------------------------------
@@ -1352,12 +1402,10 @@ void Information() {                                                 // Display 
     // ----------------------------------------------------------------------------------------------------------------
     datafile.close();
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    webpage = "";
+    Write_Console_Message("Download of Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
         webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
@@ -1365,8 +1413,6 @@ void Download_Files() {
         webpage += "</h3>";
     }
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
 }
 void Download_File() {                                                          // download the selected file
     String fileName = server.arg("file");
@@ -1387,7 +1433,6 @@ void Download_File() {                                                          
 void Delete_Files() {                                                           // allow the cliet to select a file for deleti
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
     Write_Console_Message("Delete Files Requested via Webpage");
-    webpage = "";
     Page_Header(false, "Energy Monitor Delete Files");
 #ifndef ALLOW_WORKING_FILE_DELETION
     if (file_count > 3) {
@@ -1413,8 +1458,6 @@ void Delete_Files() {                                                           
     }
 #endif
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
 }
 void Del_File() {                                                       // web request to delete a file
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
@@ -1454,17 +1497,15 @@ void Del_File() {                                                       // web r
     }
 #endif
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
 }
 void Console_Show() {
     Write_Console_Message("Web Display of Console Messages Requested via Webpage");
-    webpage = "";
     Page_Header(true, "Console Messages");
-    for (int x = 0; x < console_table_size; x++) {
+    for (int x = 0; x < Global_Console_Table_Pointer; x++) {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
         webpage += F("'>");
+        webpage += "[" + String{ x } + "] ";
         webpage += String(console_table[x].ldate);
         webpage += F(" ");
         webpage += String(console_table[x].ltime);
@@ -1475,8 +1516,6 @@ void Console_Show() {
         webpage += "</span></strong></p>";
     }
     Page_Footer();
-    server.send(200, "text/html", webpage);
-    webpage = "";
 }
 int Count_Files_on_SD_Drive() {
     int file_count = 0;
@@ -1838,7 +1877,7 @@ String GetTime(bool format) {
     while (!getLocalTime(&timeinfo)) {
         Write_Console_Message("Attempting to Get Time " + String(connection_attempts));
         delay(500);
-        Check_Red_Switch();                         // see if user wants to abort getting the time before 20 connectio attempts
+        Check_Red_Switch();                         // see if user wants to abort getting the time before 20 connection attempts
         connection_attempts++;
         if (connection_attempts > 20) {
             Write_Console_Message("Time Network Error, Restarting");
