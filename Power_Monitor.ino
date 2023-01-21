@@ -22,14 +22,12 @@ Change Record
 20/01/2023  11.0 Radical rewrite of Data handling.
 */
 String version = "V11.0";                       // software version number, shown on webpage
-
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
 //#define DISPLAY_PREFILL_ARRAY_VALUES_COLLECTED  //
 //#define DISPLAY_DATA_VALUES_COLLECTED           // print the data values as they are collected
 //#define DISPLAY_DATA_VALUES_WRITTEN             // print the data values as they written to sd drive
 //#define DISPLAY_WEATHER_INFORMATION             // print the weather data as it is received
-
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -95,7 +93,6 @@ typedef struct {
     int Day;
     int Month;
     int Year;
-    double Protocol_Version;
     String Date = "18/11/1951";
     String Time = "00:00:00";
 }sensor_data;
@@ -111,7 +108,7 @@ WiFiClient client;
 HTTPClient http;
 File Datafile;                         // Full data file, holds all readings from KWS-AC301L
 File Consolefile;
-// --------------------------------------------------------------------------------------------------------------------
+// KWS Request Field Numbers ------------------------------------------------------------------------------------------
 constexpr int Request_Voltage = 0;
 constexpr int Request_Amperage = 1;
 constexpr int Request_Wattage = 2;
@@ -201,7 +198,7 @@ union Data_Record_Union {
 Data_Record_Union Current_Data_Record;
 String Data_File_Values_19 = "                                   ";     // [24] space for the read weather description
 bool Yellow_Switch_Pressed = false;
-String site_width = "1060"; // "1060";          // width of web page
+String site_width = "1060";                     // width of web page
 String site_height = "600";                     // height of web page
 constexpr int data_table_size = 59;             // number of data table rows (5 minutes worth)
 constexpr int console_table_size = 19;          // number of lines to display on debug web page
@@ -1240,7 +1237,7 @@ void Display() {
     webpage += F("min:");
     webpage += String(minimum_amperage, 1);
     webpage += F(",max:");
-    webpage += String(maximum_amperage, 1);
+    webpage += String((maximum_amperage + maximum_amperage / 10), 3);
     webpage += F("}, ");
     webpage += F("scaleType: '");
     webpage += "log";
