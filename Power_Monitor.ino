@@ -20,8 +20,10 @@ Change Record
 06/01/2023  10.0 Radical rewrite of Data handling
 09/01/2023  10.1 Bug Fix
 20/01/2023  11.0 Radical rewrite of Data handling.
+21/01/2023  11.1 Coverted receive milli amperage to amperage in amps.
+25/01/2023  11.2 Removed milliseconds from console records
 */
-String version = "V11.0";                       // software version number, shown on webpage
+String version = "V11.1";                       // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
 //#define DISPLAY_PREFILL_ARRAY_VALUES_COLLECTED  //
@@ -274,8 +276,7 @@ String latest_weather_description = "                                     ";
 // --------------------------------------------------------------------------------------------------------------------
 typedef struct {
     char ldate[11];         // date the message was taken
-    char ltime[9];          // the time the message was taken
-    unsigned long milliseconds;  // the millis() value of the message    
+    char ltime[9];          // the time the message was taken  
     char message[120];
 } console_record_type;
 console_record_type console_table[console_table_size + 1];
@@ -678,7 +679,6 @@ void Write_Console_Message(String console_message) {
     String saved_console_message = console_message;
     String Date = "1951/18/11";
     String Time = "00:00:00";
-    unsigned long milliseconds = millis();
     String pre_date = "1951/18/11";
     String pre_time = "00:00:00";
     if (Post_Setup_Status) {                                                // only write the console message to disk once setup is complete
@@ -687,26 +687,25 @@ void Write_Console_Message(String console_message) {
                 Update_TimeInfo(true);
                 pre_date = Sensor_Data.Date;
                 pre_time = Sensor_Data.Time;
-                Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_millis_values[x], pre_loop_messages[x]);
-                Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_millis_values[x], pre_loop_messages[x]);
+                Write_New_Console_Message_to_Console_File(pre_date, pre_time, pre_loop_messages[x]);
+                Add_New_Console_Message_to_Console_Table(pre_date, pre_time, pre_loop_messages[x]);
             }
             pre_loop_message_count = 0;
         }
         Update_TimeInfo(true);
         Date = Sensor_Data.Date;
         Time = Sensor_Data.Time;
-        Write_New_Console_Message_to_Console_File(Date, Time, milliseconds, saved_console_message);
-        Add_New_Console_Message_to_Console_Table(Date, Time, milliseconds, saved_console_message);
+        Write_New_Console_Message_to_Console_File(Date, Time, saved_console_message);
+        Add_New_Console_Message_to_Console_Table(Date, Time, saved_console_message);
     }
     else {
-        pre_loop_millis_values[pre_loop_message_count] = millis();
         pre_loop_messages[pre_loop_message_count] = console_message;
         pre_loop_message_count++;
     }
     console_message = saved_console_message;
     console.print(millis(), DEC); console.print("\t"); console.println(console_message);
 }
-void Write_New_Console_Message_to_Console_File(String date, String time, unsigned long milliseconds, String console_message) {
+void Write_New_Console_Message_to_Console_File(String date, String time, String console_message) {
 #ifdef DISPLAY_PROGRAMME_PROGRESS
     console.print(millis(), DEC); console.println("\tWrite_New_Console_Message_to_Console_File Entered");
 #endif
@@ -721,7 +720,7 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
             Check_Red_Switch();                                   // Reset will restart the processor so no return
         }
     }
-    Consolefile.println(date + "," + time + "," + milliseconds + "," + console_message);
+    Consolefile.println(date + "," + time + "," + console_message);
     Consolefile.close();                                            // close the sd file
     Consolefile.flush();                                            // make sure it has been written to SD
     SD_freespace_double = (double)SD_freespace / 1000000;
@@ -737,25 +736,22 @@ void Write_New_Console_Message_to_Console_File(String date, String time, unsigne
     Global_Console_Record_Count++;
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
 }
-void Add_New_Console_Message_to_Console_Table(String date, String time, unsigned long milliseconds, String console_message) {
+void Add_New_Console_Message_to_Console_Table(String date, String time, String console_message) {
     if (Global_Console_Table_Pointer > console_table_size) {                           // table full, shuffle fifo
         for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
             strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
             strncpy(console_table[i].ltime, console_table[i + 1].ltime, sizeof(console_table[i].ltime));             // time
-            console_table[i].milliseconds = console_table[i + 1].milliseconds;
             strncpy(console_table[i].message, console_table[i + 1].message, sizeof(console_table[i].message));
         }
         Global_Console_Table_Pointer = console_table_size;               // subsequent records will be added at the end of the table
         strncpy(console_table[console_table_size].ldate, date.c_str(), sizeof(console_table[console_table_size].ldate));
         strncpy(console_table[console_table_size].ltime, time.c_str(), sizeof(console_table[console_table_size].ltime));
-        console_table[console_table_size].milliseconds = milliseconds;
         strncpy(console_table[console_table_size].message, console_message.c_str(), sizeof(console_table[console_table_size].message));
         Global_Console_Table_Pointer = console_table_size;                     // write the new message onto the end of the table
     }
     else {                                                                      // add the record to the table
         strncpy(console_table[Global_Console_Table_Pointer].ldate, date.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ldate));
         strncpy(console_table[Global_Console_Table_Pointer].ltime, time.c_str(), sizeof(console_table[Global_Console_Table_Pointer].ltime));
-        console_table[Global_Console_Table_Pointer].milliseconds = milliseconds;
         strncpy(console_table[Global_Console_Table_Pointer].message, console_message.c_str(), sizeof(console_table[Global_Console_Table_Pointer].message));      // write the new message onto the end of the table
         Global_Console_Table_Pointer++;                                                     // increment the table pointer
     }
@@ -1152,9 +1148,6 @@ void Prefill_Console_Array() {
                     strncpy(console_table[Global_Console_Table_Pointer].ltime, console_txtField, sizeof(console_table[Global_Console_Table_Pointer].ltime));        // Time
                     break;
                 case 3:
-                    console_table[Global_Console_Table_Pointer].milliseconds = atof(console_txtField); // milliseconds
-                    break;
-                case 4:
                     strncpy(console_table[Global_Console_Table_Pointer].message, console_txtField, sizeof(console_table[Global_Console_Table_Pointer].message));      // message
                     break;
                 }
@@ -1175,7 +1168,6 @@ void Prefill_Console_Array() {
                     for (int i = 0; i < console_table_size; i++) {                              // shuffle the rows up, losing row 0, make row [table_size] free
                         strncpy(console_table[i].ldate, console_table[i + 1].ldate, sizeof(console_table[i].ldate));             // date
                         strncpy(console_table[i].ltime, console_table[i + 1].ltime, sizeof(console_table[i].ltime));             // time
-                        console_table[i].milliseconds = console_table[i + 1].milliseconds;
                         strncpy(console_table[i].message, console_table[i + 1].message, sizeof(console_table[i].message));
                     }
                     Global_Console_Table_Pointer = console_table_size;                                                  // subsequent records will be added at the end of the table
@@ -1594,8 +1586,6 @@ void Console_Show() {
         webpage += String(console_table[x].ldate);
         webpage += F(" ");
         webpage += String(console_table[x].ltime);
-        webpage += F(".");
-        webpage += String(console_table[x].milliseconds);
         webpage += F(": ");
         webpage += String(console_table[x].message);
         webpage += "</span></strong></p>";
@@ -1749,9 +1739,9 @@ void Receive(int field) {
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
             console.print("\tReceived Amperage (Raw): "); console.print(amperage, 4);
 #endif
-            // no conversion     
+            amperage /= (double)1000;                                                               // convert milliamps to amps
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
-            console.print("\t\t"); console.println(amperage, 4);
+            console.print("\t/1000\t"); console.println(amperage, 4);
 #endif
             Current_Data_Record.field.amperage = amperage;                                                  // Amperage output format double nn.n
             break;
@@ -1767,7 +1757,7 @@ void Receive(int field) {
 #endif
             Current_Data_Record.field.wattage = wattage;
             break;
-        }
+    }
         case Request_UpTime: {                                                                      //  [3] Uptime
             double uptime = (double)(value[3] << 8) + (double)value[4];
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
@@ -1779,7 +1769,7 @@ void Receive(int field) {
 #endif
             Current_Data_Record.field.uptime = uptime;
             break;
-        }
+}
         case Request_Kilowatthour: {                                                                //  [4] KilowattHour
             double kilowatthour = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
@@ -1907,7 +1897,6 @@ void Clear_Arrays() {                                           // clear the web
         console_table[x].ldate[0] = '0';
         console_table[x].ltime[0] = '0';
         console_table[x].message[0] = '0';
-        console_table[x].milliseconds = 0;
     }
     for (int x = 0; x <= data_table_size; x++) {
         for (int y = 0; y < packet_length; y++)
