@@ -22,8 +22,9 @@ Change Record
 20/01/2023  11.0 Radical rewrite of Data handling.
 21/01/2023  11.1 Coverted receive milli amperage to amperage in amps.
 25/01/2023  11.2 Removed milliseconds from console records
+28/01/2023  11.3 Fixed Time to cope with hours <10 & changed width to show the y axis labels
 */
-String version = "V11.1";                       // software version number, shown on webpage
+String version = "V11.3";                       // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
 //#define DISPLAY_PREFILL_ARRAY_VALUES_COLLECTED  //
@@ -1183,8 +1184,6 @@ void Prefill_Console_Array() {
 }
 void Display() {
     double maximum_amperage = 0;
-    double minimum_amperage = 0;
-    double this_amperage = 0;
     Write_Console_Message("Web Display of Graph Requested via Webpage");
     Page_Header(true, "Energy Usage Monitor");
     // <script> -------------------------------------------------------------------------------------------------------
@@ -1209,9 +1208,7 @@ void Display() {
             webpage += "[[";
             webpage += String(readings_table[i].field.ltime) + "],";
             webpage += String(readings_table[i].field.amperage, 1) + "]";
-            this_amperage = readings_table[i].field.amperage;
-            if (this_amperage > maximum_amperage) maximum_amperage = this_amperage;
-            if (this_amperage < minimum_amperage) minimum_amperage = this_amperage;
+            if (readings_table[i].field.amperage > maximum_amperage) maximum_amperage = readings_table[i].field.amperage;
             if (i != Global_Data_Table_Pointer) webpage += ",";    // do not add a "," to the last record
         }
     }
@@ -1220,20 +1217,19 @@ void Display() {
     webpage += F("title:'Electrical Power Consumption");
     webpage += " (logarithmic scale)";
     webpage += F("',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'DodgerBlue'},");
-    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'90%', height:'80%'},");
+    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'80%', height:'80%'},");
     webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
     webpage += F("gridlines:{color:'#333'},showTextEvery:1");
     webpage += F("},");
     webpage += F("vAxes:");
     webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{");
-    webpage += F("min:");
-    webpage += String(minimum_amperage, 1);
+    webpage += F("min:0");
     webpage += F(",max:");
     webpage += String((maximum_amperage + maximum_amperage / 10), 3);
     webpage += F("}, ");
     webpage += F("scaleType: '");
     webpage += "log";
-    webpage += F("', title : 'Amperage(A)', format : '##.####'}, ");
+    webpage += F("', title : 'Amperage(A)', format : '##.###'}, ");
     webpage += F("}, ");
     webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
     webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data, options);");
@@ -1757,7 +1753,7 @@ void Receive(int field) {
 #endif
             Current_Data_Record.field.wattage = wattage;
             break;
-    }
+        }
         case Request_UpTime: {                                                                      //  [3] Uptime
             double uptime = (double)(value[3] << 8) + (double)value[4];
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
@@ -1769,7 +1765,7 @@ void Receive(int field) {
 #endif
             Current_Data_Record.field.uptime = uptime;
             break;
-}
+        }
         case Request_Kilowatthour: {                                                                //  [4] KilowattHour
             double kilowatthour = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);
 #ifdef DISPLAY_DATA_VALUES_COLLECTED 
@@ -1963,7 +1959,13 @@ void Update_TimeInfo(bool format) {
     }
     Sensor_Data.Date += String(Sensor_Data.Day);            //  1951/11/18
     // ----------------------------------------------------------------------------------------------------------------
-    Sensor_Data.Time = String(Sensor_Data.Hour);            //  23
+    if (Sensor_Data.Hour < 10) {
+        Sensor_Data.Time = "0";
+    }
+    else {
+        Sensor_Data.Time = "";
+    }
+    Sensor_Data.Time += String(Sensor_Data.Hour);           //  23
     if (format) {
         Sensor_Data.Time += ":";                            //  23:
     }
