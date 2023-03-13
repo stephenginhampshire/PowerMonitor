@@ -1943,6 +1943,7 @@ void Update_TimeInfo(bool format) {
     Sensor_Data.Minute = timeinfo.tm_min;
     Sensor_Data.Second = timeinfo.tm_sec;
     // ----------------------------------------------------------------------------------------------------------------
+
     Sensor_Data.Date = String(Sensor_Data.Year);            //  1951
     if (format) {
         Sensor_Data.Date += "/";                            //  1951/
@@ -1958,18 +1959,16 @@ void Update_TimeInfo(bool format) {
         Sensor_Data.Date += "0";                            //  1951/11/0
     }
     Sensor_Data.Date += String(Sensor_Data.Day);            //  1951/11/18
-    // ----------------------------------------------------------------------------------------------------------------
-    if (Sensor_Data.Hour < 10) {
+    // TIME -----------------------------------------------------------------------------------------------------------
+    Sensor_Data.Time = "";
+    if (Sensor_Data.Hour < 10) {                            // if hours are less than 10 add a 0
         Sensor_Data.Time = "0";
     }
-    else {
-        Sensor_Data.Time = "";
-    }
-    Sensor_Data.Time += String(Sensor_Data.Hour);           //  23
-    if (format) {
+    Sensor_Data.Time += String(Sensor_Data.Hour);           //  add hours
+    if (format) {                                           //  add a : if format true
         Sensor_Data.Time += ":";                            //  23:
     }
-    if (Sensor_Data.Hour < 10) {
+    if (Sensor_Data.Minute < 10) {                          //  if minutes are less than 10 add a 0
         Sensor_Data.Time += "0";                            //  23:0
     }
     Sensor_Data.Time += String(Sensor_Data.Minute);         //  23:59
