@@ -23,14 +23,16 @@ Change Record
 21/01/2023  11.1 Coverted receive milli amperage to amperage in amps.
 25/01/2023  11.2 Removed milliseconds from console records
 28/01/2023  11.3 Fixed Time to cope with hours <10 & changed width to show the y axis labels
+15/03/2023  11.4 Gas Meter Pulse Output monitoring added, 1 pulse = 0.1 cubic metres of gas used
 */
-String version = "V11.3";                       // software version number, shown on webpage
+String version = "V11.4";                       // software version number, shown on webpage
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define ALLOW_WORKING_FILE_DELETION           // allows the user to chose to delete the day's working files
 //#define DISPLAY_PREFILL_ARRAY_VALUES_COLLECTED  //
 //#define DISPLAY_DATA_VALUES_COLLECTED           // print the data values as they are collected
 //#define DISPLAY_DATA_VALUES_WRITTEN             // print the data values as they written to sd drive
 //#define DISPLAY_WEATHER_INFORMATION             // print the weather data as it is received
+//#define DISPLAY_GAS_VALUES_WRITTEN
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
@@ -88,6 +90,8 @@ constexpr int SCK_pin = 18;
 constexpr int MISO_pin = 19;
 constexpr int MOSI_pin = 23;
 constexpr int ONBOARDLED = 2;
+constexpr int GAS_pin_input = 1;
+constexpr int GAS_pin_source = 3;
 // Date and Time Fields -----------------------------------------------------------------------------------------------0
 typedef struct {
     int Second;
@@ -111,6 +115,7 @@ WiFiClient client;
 HTTPClient http;
 File Datafile;                         // Full data file, holds all readings from KWS-AC301L
 File Consolefile;
+File Gasfile;
 // KWS Request Field Numbers ------------------------------------------------------------------------------------------
 constexpr int Request_Voltage = 0;
 constexpr int Request_Amperage = 1;
@@ -135,8 +140,9 @@ constexpr byte RS485_Requests[Number_of_RS485_Requests + 1][8] = {
                         {0x02,0x03,0x00,0x1A,0x00,0x01,0xA5,0xFE},          // [7]  Request temperature, in degrees centigrade
 };
 char print_buffer[80];
-String DataFileName = "20220101";
-String ConsoleFileName = "20220101";
+String DataFileName = "20220101";           // .cvs
+String ConsoleFileName = "20220101";        // .txt
+String GasFileName = "G0220101";            // .cvs
 constexpr int Number_of_Field_Names = 9;
 const String Request_Field_Names[Number_of_Field_Names + 1] = {
                         "Date",                     // [0]
@@ -199,22 +205,47 @@ union Data_Record_Union {
     unsigned char character[current_data_record_length + 1];
 };
 Data_Record_Union Current_Data_Record;
+struct Gas_Record_Values {
+    char ldate[11];                 //  [0 - 10]  [00]  date record was taken
+    char ltime[9];                  //  [11 - 19] [01]  time record was taken
+    double gas_usage;                  //  [20 - 23]
+}__attribute__((packed));
+constexpr int current_gas_record_length = 23;
+union Gas_Record_Union {
+    Gas_Record_Values field;
+    unsigned char character[current_gas_record_length + 1];
+};
+Gas_Record_Union Current_Gas_Record;
 String Data_File_Values_19 = "                                   ";     // [24] space for the read weather description
 bool Yellow_Switch_Pressed = false;
 String site_width = "1060";                     // width of web page
 String site_height = "600";                     // height of web page
 constexpr int data_table_size = 59;             // number of data table rows (5 minutes worth)
 constexpr int console_table_size = 19;          // number of lines to display on debug web page
+constexpr int gas_table_size = 59;
 int Global_Data_Table_Pointer = 0;              // points to the next index of Data_Table
 int Global_Data_Record_Count = 0;               // running total of records written to Data Table
 int Global_Console_Table_Pointer = 0;           // points to the next index of Console Table
 int Global_Console_Record_Count = 0;            // running total of records writtem tp Console Table
+int Global_Gas_Table_Pointer = 0;
+int Global_Gas_Record_Count = 0;
 String webpage;
 String lastcall;
 double temperature_calibration = (double)16.5 / (double)22.0;   // temperature reading = 22, actual temperature = 16.5
 String Last_Boot_Time = "12:12:12";
 String Last_Boot_Date = "2022/29/12";
 String This_Date = "2022/10/10";
+struct Gas_Table_Record {
+    char ldate[11];                 //  [00 - 10] date of last pulse
+    char ltime[9];                  //  [11 - 19] time of last pulse
+    double gas_usage;                   //  [20 - 23] usage (calculated)
+};
+constexpr int gas_packet_length = 103;
+union Gas_Table_Union {
+    Gas_Table_Record field;
+    unsigned char characters[gas_packet_length + 1];
+};
+Gas_Table_Union gas_readings_table[gas_table_size + 1];
 struct Data_Table_Record {
     char ldate[11];                 //  [0 - 10]  date record was taken
     char ltime[9];                  //  [11 - 19]  time record was taken
@@ -242,6 +273,18 @@ union Data_Table_Union {
     unsigned char characters[packet_length + 1];
 };
 Data_Table_Union readings_table[data_table_size + 1];
+// Gas Usage Information ----------------------------------------------------------------------------------------------
+String time_of_previous_gas_pulse = "00:00:00";
+String date_of_previous_gas_pulse = "0000/00/00";
+String time_of_latest_gas_pulse = "00:00:00";
+String date_of_latest_gas_pulse = "0000/00/00";
+bool Gas_Pulse_Received = false;
+int Previous_Gas_Year = 0;
+int Previous_Gas_Month = 0;
+int Previous_Gas_Day = 0;
+int Previous_Gas_Hour = 0;
+int Previous_Gas_Minute = 0;
+double Maximum_Gas_Usage = 0;
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double lowest_voltage = 0;
 String time_of_lowest_voltage = "00:00:00";
@@ -274,6 +317,22 @@ double latest_wind_speed = 0;
 double latest_wind_direction = 0;
 // Latest Weather Description -----------------------------------------------------------------------------------------
 String latest_weather_description = "                                     ";
+constexpr int Days_in_Month[13][2] = {
+    // Leap,Normal
+        {00,00},    // 
+        {31,31},    // Jan 31/31
+        {29,28},    // Feb 29/28
+        {31,30},    // Mar 31/31
+        {30,30},    // Apr 30/30
+        {31,31},    // May 31/31
+        {30,30},    // Jun 30/30
+        {31,31},    // Jul 31/31
+        {31,31},    // Aug 31/31
+        {30,30},    // Sep 30/30
+        {31,31},    // Oct 31/31
+        {30,30},    // Nov 30/30
+        {31,31}     // Dec 31/31
+};
 // --------------------------------------------------------------------------------------------------------------------
 typedef struct {
     char ldate[11];         // date the message was taken
@@ -310,21 +369,28 @@ bool New_Day_File_Required = true;
 unsigned long sd_off_time = 0;
 unsigned long sd_on_time = 0;
 int WiFi_Signal_Strength = 0;
+volatile bool Gas_ISR_Flag = false;
 // setup --------------------------------------------------------------------------------------------------------------
 extern volatile unsigned long timer0_millis;
+void GAS_ISR() {
+    Gas_ISR_Flag = true;
+}
 void setup() {
     console.begin(console_Baudrate);                                            // enable the console
     while (!console);                                                           // wait for port to settle
     delay(4000);
     Post_Setup_Status = false;
-    Write_Console_Message("Booting - Commencing Setup");
-    Write_Console_Message("Configuring IO");
+    Console_Print("Booting - Commencing Setup");
+    Console_Print("Configuring IO");
     pinMode(SD_Active_led_pin, OUTPUT);
     pinMode(Green_Switch_pin, INPUT_PULLUP);
     pinMode(Red_Switch_pin, INPUT_PULLUP);
     pinMode(Blue_Switch_pin, INPUT_PULLUP);
     pinMode(Yellow_Switch_pin, INPUT_PULLUP);
     pinMode(Running_led_pin, OUTPUT);
+    pinMode(GAS_pin_source, OUTPUT);
+    digitalWrite(GAS_pin_source, HIGH);                     // this is the signal source for the gas interrupt
+    attachInterrupt(digitalPinToInterrupt(GAS_pin_input), GAS_ISR, CHANGE);
     Red_Switch.attach(Red_Switch_pin);     // setup defaults for debouncing switches
     Green_Switch.attach(Green_Switch_pin);
     Blue_Switch.attach(Blue_Switch_pin);
@@ -337,15 +403,16 @@ void setup() {
     Blue_Switch.update();
     digitalWrite(Running_led_pin, LOW);
     digitalWrite(SD_Active_led_pin, LOW);
-    Write_Console_Message("IO Configuration Complete");
+    Console_Print("IO Configuration Complete");
     // WiFi and Web Setup -------------------------------------------------------------------------
     StartWiFi(ssid, password);                      // Start WiFi
     StartTime();                                    // Start Time
-    Write_Console_Message("Starting Server");
+    Console_Print("Starting Server");
     server.begin();                                 // Start Webserver
-    Write_Console_Message("Server Started");
+    Console_Print("Server Started");
     server.on("/", Display);                        // nothing specified so display main web page
     server.on("/Display", Display);                 // display the main web page
+    server.on("/Gas", Display_Gas);                 // display the gas usage page
     server.on("/Information", Information);         // display information
     server.on("/DownloadFiles", Download_Files);    // select a file to download
     server.on("/GetFile", Download_File);           // download the selectedfile
@@ -357,7 +424,7 @@ void setup() {
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
     if (!SD.begin(SS_pin)) {
-        Write_Console_Message("SD Drive Begin Failed");
+        Console_Print("SD Drive Begin Failed");
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -366,10 +433,10 @@ void setup() {
         }
     }
     else {
-        Write_Console_Message("SD Drive Begin Succeeded");
+        Console_Print("SD Drive Begin Succeeded");
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
-            Write_Console_Message("No SD Card Found");
+            Console_Print("No SD Card Found");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -390,14 +457,14 @@ void setup() {
         else {
             card = "UNKNOWN";
         }
-        Write_Console_Message("SD Card Type: " + card);
+        Console_Print("SD Card Type: " + card);
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
         critical_SD_freespace = cardSize * (uint64_t).9;
-        Write_Console_Message("SD Card Size : " + String(cardSize) + "MBytes");
-        Write_Console_Message("SD Total Bytes : " + String(SD.totalBytes()));
-        Write_Console_Message("SD Used bytes : " + String(SD.usedBytes()));
-        Write_Console_Message("SD Card Initialisation Complete");
-        Write_Console_Message("Create Console Logging File");
+        Console_Print("SD Card Size : " + String(cardSize) + "MBytes");
+        Console_Print("SD Total Bytes : " + String(SD.totalBytes()));
+        Console_Print("SD Used bytes : " + String(SD.usedBytes()));
+        Console_Print("SD Card Initialisation Complete");
+        Console_Print("Create Console Logging File");
     }
     Update_TimeInfo(false);                                                  // update This date time info, no /s
     This_Date = Sensor_Data.Date;
@@ -405,8 +472,9 @@ void setup() {
     Last_Boot_Time = Sensor_Data.Time;
     Last_Boot_Date = Sensor_Data.Date;
     Create_New_Data_File();
+    Create_New_Gas_File();
     Create_New_Console_File();
-    Write_Console_Message("Preparing Customised Weather Request");
+    Console_Print("Preparing Customised Weather Request");
     int count = 0;
     for (int x = 0; x <= 120; x++) {
         if (incomplete_weather_api_link[x] == '\0') break;
@@ -424,10 +492,10 @@ void setup() {
             }
         }
     }
-    Write_Console_Message("Weather Request Created");
+    Console_Print("Weather Request Created");
     digitalWrite(SD_Active_led_pin, LOW);
-    Write_Console_Message("End of Setup");
-    Write_Console_Message("Running in Full Function Mode");
+    Console_Print("End of Setup");
+    Console_Print("Running in Full Function Mode");
     Post_Setup_Status = true;
 }   // end of Setup
 void loop() {
@@ -439,16 +507,18 @@ void loop() {
     Drive_Running_Led();                                    // on when started, flashing when not, flashing with SD led if waiting for reset
     Update_TimeInfo(false);                                 // update the Date and Time
     if (This_Date != Sensor_Data.Date && New_Day_File_Required == true) {   // check we are in same day as the setup
-        Write_Console_Message("This Date:" + (This_Date)+" Now Date: " + Sensor_Data.Date + "New_Day_File_Required:" + String(New_Day_File_Required));
-        Write_Console_Message("New Day Process Commenced");
+        Console_Print("This Date:" + (This_Date)+" Now Date: " + Sensor_Data.Date + "New_Day_File_Required:" + String(New_Day_File_Required));
+        Console_Print("New Day Process Commenced");
         Create_New_Data_File();                             // no, so create a new Data File with new file name
         Create_New_Console_File();
+        Create_New_Gas_File();
         Clear_Arrays();                                     // clear memory
         New_Day_File_Required = false;
     }
     else {
         New_Day_File_Required = true;                       // reset the flag
     }
+    Check_Gas();
     server.handleClient();                                  // handle any messages from the website
     if (millis() > last_cycle + (unsigned long)5000) {      // send requests every 5 seconds (5000 millisecods)
         last_cycle = millis();                              // update the last read milli second reading
@@ -462,7 +532,7 @@ void loop() {
                 Parse_Weather_Info(payload);
             }
             else {
-                Write_Console_Message("Obtaining Weather Information Failed, Return code: " + String(httpCode));
+                Console_Print("Obtaining Weather Information Failed, Return code: " + String(httpCode));
             }
             http.end();
         }
@@ -484,11 +554,47 @@ void loop() {
         Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
     }                                                           // end of if millis >5000
 }                                                               // end of loop
+void Check_Gas() {
+    if (Gas_ISR_Flag) {
+        Gas_ISR_Flag = false;
+        Write_New_Gas_Record_to_Gas_File();
+        Add_New_Gas_Record_to_Gas_Table();
+    }
+}
+void Write_New_Gas_Record_to_Gas_File() {                       // write the new gas meter pulse date and time to the gas file
+    digitalWrite(SD_Active_led_pin, HIGH);                      // turn the SD activity LED on
+    Gasfile = SD.open("/" + GasFileName, FILE_APPEND);          // open the SD file
+    if (!Gasfile) {                                             // oops - file not available!
+        Console_Print("Error re-opening Gas file:" + String(GasFileName));
+        while (true) {
+            digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+            digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+            delay(500);
+            Check_Red_Switch();                               // Reset will restart the processor so no return
+        }
+    }
+    SD_freespace = (SD.totalBytes() - SD.usedBytes());
+    console.print(millis(), DEC);
+    console.println
+        Console_Print("\tNew Gas Record Written");
+    Gasfile.print(Current_Gas_Record.field.ldate);              // [00] Date                           
+    Gasfile.print(",");                                         // delimited
+    Gasfile.println(Current_Gas_Record.field.ltime);            // [01] Time
+    Gasfile.close();                                            // close the sd file
+    Gasfile.flush();                                            // make sure it has been written to SD
+    Global_Gas_Table_Pointer++;                                 // increment the record count, the array pointer
+    Global_Gas_Record_Count++;                                  // increment the current record count
+    digitalWrite(SD_Active_led_pin, LOW);                       // turn the SD activity LED on
+    Update_Webpage_Variables_from_Current_Gas_Record();
+    console.print(millis(), DEC); console.println("\tGas Pulse Date and Time Written:");
+    console.print("\t\tDate: "); console.println(Current_Gas_Record.field.ldate);                                      // [0] date
+    console.print("\t\tTime: "); console.println(Current_Gas_Record.field.ltime);                                      // [1] time
+}
 void Write_New_Data_Record_to_Data_File() {
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     Datafile = SD.open("/" + DataFileName, FILE_APPEND);            // open the SD file
     if (!Datafile) {                                                // oops - file not available!
-        Write_Console_Message("Error re-opening Datafile:" + String(DataFileName));
+        Console_Print("Error re-opening Datafile:" + String(DataFileName));
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -546,6 +652,82 @@ void Write_New_Data_Record_to_Data_File() {
     console.print("\t\tWind Direction: "); console.println(Current_Data_Record.field.wind_direction, 2);                // [17] wind speed
     console.print("\t\tWeather Description"); console.println(Current_Data_Record.field.weather_description);           // [18] weather description
 #endif
+}
+void Write_Gas_Record() {
+    Update_TimeInfo(true);
+    if (!Gas_Pulse_Received) {                       // detect the first reading
+        Gas_Pulse_Received = true;
+        for (int x = 0; x < 10; x++) {
+            date_of_previous_gas_pulse[x] = Sensor_Data.Date[x];
+        }
+        for (int x = 0; x < 9; x++) {
+            time_of_previous_gas_pulse[x] = Sensor_Data.Time[x];
+        }
+        Previous_Gas_Year = Sensor_Data.Year;
+        Previous_Gas_Month = Sensor_Data.Month;
+        Previous_Gas_Day = Sensor_Data.Day;
+        Previous_Gas_Hour = Sensor_Data.Hour;
+        Previous_Gas_Minute = Sensor_Data.Minute;
+        Console_Print("Initial Gas Pulse Received");
+    }
+    else {
+        Console_Print("Gas Pulse Received");
+        //  1. Calculate the volume of gas per minute
+        int previous_number_of_minutes = (Previous_Gas_Hour * 60) + Previous_Gas_Minute;
+        int number_of_elapsed_minutes = ((Sensor_Data.Hour * 60) + Sensor_Data.Minute) - previous_number_of_minutes;
+        double gas_volume_per_minute = (double)100000 / (double)number_of_elapsed_minutes;    // pulse every 0.1 m^3
+        //  2. Loop from the previous gas time writing gas file, incrementing every minute
+        for (int minute = 0; minute < number_of_elapsed_minutes; minute++) {
+            for (int x = 0; x < 10; x++) {
+                Current_Gas_Record.field.ldate[x] = date_of_previous_gas_pulse[x];
+            }
+            for (int x = 0; x < 9; x++) {
+                Current_Gas_Record.field.ltime[x] = time_of_previous_gas_pulse[x];
+            }
+            Current_Gas_Record.field.gas_usage = gas_volume_per_minute;
+            Write_New_Gas_Record_to_Gas_File();
+            Previous_Gas_Minute++;
+            if (Previous_Gas_Minute > 59) {
+                Previous_Gas_Minute = 0;
+                Previous_Gas_Hour++;
+                if (Previous_Gas_Hour > 23) {
+                    Previous_Gas_Hour = 0;
+                    Previous_Gas_Day++;
+                    if (Previous_Gas_Day > Days_in_Month[Previous_Gas_Month][Previous_Gas_Year % 4]) {
+                        Previous_Gas_Day = 1;
+                        Previous_Gas_Month++;
+                        if (Previous_Gas_Month > 12) {
+                            Previous_Gas_Month = 1;
+                            Previous_Gas_Year++;
+                        }
+                    }
+                }
+            }
+            date_of_previous_gas_pulse = String(Previous_Gas_Year);         //  1951
+            date_of_previous_gas_pulse += "/";                              //  1951/
+            if (Previous_Gas_Month < 10) {
+                date_of_previous_gas_pulse += "0";                          //  1951/0
+            }
+            date_of_previous_gas_pulse += String(Previous_Gas_Month);       //  1951/11
+            date_of_previous_gas_pulse += "/";                              //  1951/11/
+            if (Previous_Gas_Day < 10) {
+                date_of_previous_gas_pulse += "0";                          //  1951/11/0
+            }
+            date_of_previous_gas_pulse += String(Previous_Gas_Day);         //  1951/11/18
+            // TIME -----------------------------------------------------------------------------------------------------------
+            time_of_previous_gas_pulse = "";
+            if (Previous_Gas_Hour < 10) {                                   // if hours are less than 10 add a 0
+                time_of_previous_gas_pulse = "0";
+            }
+            time_of_previous_gas_pulse += String(Previous_Gas_Hour);        //  add hours
+            time_of_previous_gas_pulse += ":";                              //  23:
+            if (Previous_Gas_Minute < 10) {                                 //  if minutes are less than 10 add a 0
+                time_of_previous_gas_pulse += "0";                          //  23:0
+            }
+            time_of_previous_gas_pulse += String(Previous_Gas_Minute);      //  23:59
+            time_of_previous_gas_pulse += ":00";                            //  23:59:00
+        }
+    }
 }
 void Add_New_Data_Record_to_Display_Table() {
     if (Global_Data_Table_Pointer > data_table_size) {                                                   // table full, shuffle fifo
@@ -613,6 +795,21 @@ void Add_New_Data_Record_to_Display_Table() {
         strncpy(readings_table[Global_Data_Table_Pointer].field.weather_description, Current_Data_Record.field.weather_description, sizeof(readings_table[Global_Data_Table_Pointer].field.weather_description));        // [18] weather description
     }
 }
+void Add_New_Gas_Record_to_Gas_Table() {
+    if (Global_Gas_Table_Pointer > gas_table_size) {                                                   // table full, shuffle fifo
+        for (i = 0; i < gas_table_size; i++) {                                                          // shuffle the rows up, losing row 0, make row [table_size] free
+            strncpy(gas_readings_table[i].field.ldate, gas_readings_table[i + 1].field.ldate, sizeof(gas_readings_table[i].field.ldate)); // [0]  date
+            strncpy(gas_readings_table[i].field.ltime, gas_readings_table[i + 1].field.ltime, sizeof(gas_readings_table[i].field.ltime)); // [1]  time
+        }
+        Global_Gas_Table_Pointer = gas_table_size;                                                             // subsequent records will be added at the end of the table
+        strncpy(gas_readings_table[gas_table_size].field.ldate, Current_Gas_Record.field.ldate, sizeof(gas_readings_table[gas_table_size].field.ldate));                       // [0]  date
+        strncpy(gas_readings_table[gas_table_size].field.ltime, Current_Gas_Record.field.ltime, sizeof(gas_readings_table[gas_table_size].field.ltime));                       // [1]  time
+    }
+    else {                                                                          // add the record to the table
+        strncpy(gas_readings_table[Global_Gas_Table_Pointer].field.ldate, Current_Gas_Record.field.ldate, sizeof(gas_readings_table[Global_Gas_Table_Pointer].field.ldate));                       // [0]  date
+        strncpy(gas_readings_table[Global_Gas_Table_Pointer].field.ltime, Current_Gas_Record.field.ltime, sizeof(gas_readings_table[Global_Gas_Table_Pointer].field.ltime));                       // [1]  time
+    }
+}
 void Create_New_Console_File() {
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     Update_TimeInfo(false);
@@ -620,7 +817,7 @@ void Create_New_Console_File() {
     if (!SD.exists("/" + ConsoleFileName)) {
         Consolefile = SD.open("/" + ConsoleFileName, FILE_WRITE);
         if (!Consolefile) {                                         // log file not opened
-            Write_Console_Message("Error opening Console file: [" + String(ConsoleFileName) + "]");
+            Console_Print("Error opening Console file: [" + String(ConsoleFileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -632,12 +829,12 @@ void Create_New_Console_File() {
         Consolefile.println(Sensor_Data.Date + "," + Sensor_Data.Time + "," + String(millis()) + ",Console File Started");
         Consolefile.close();
         Consolefile.flush();
-        Write_Console_Message("Console File " + String(ConsoleFileName) + " created");
+        Console_Print("Console File " + String(ConsoleFileName) + " created");
         Global_Console_Record_Count = 1;
         //        Global_Console_Table_Pointer = 1;
     }
     else {
-        Write_Console_Message("Console File " + String(ConsoleFileName) + " already exists");
+        Console_Print("Console File " + String(ConsoleFileName) + " already exists");
         Prefill_Console_Array();
     }
     digitalWrite(SD_Active_led_pin, LOW);                           // turn the SD activity LED off
@@ -649,7 +846,7 @@ void Create_New_Data_File() {
     if (!SD.exists("/" + DataFileName)) {
         Datafile = SD.open("/" + DataFileName, FILE_WRITE);
         if (!Datafile) {                                            // log file not opened
-            Write_Console_Message("Error opening Data file in Create New Data File [" + String(DataFileName) + "]");
+            Console_Print("Error opening Data file in Create New Data File [" + String(DataFileName) + "]");
             while (true) {
                 digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                 digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -669,14 +866,46 @@ void Create_New_Data_File() {
         digitalWrite(SD_Active_led_pin, LOW);
         Update_TimeInfo(false);
         This_Date = Sensor_Data.Date;                                 // update the current date
-        Write_Console_Message("Data File " + DataFileName + " created");
+        Console_Print("Data File " + DataFileName + " created");
     }
     else {
-        Write_Console_Message("Data File " + String(DataFileName) + " already exists");
+        Console_Print("Data File " + String(DataFileName) + " already exists");
         Prefill_Array();
     }
 }
-void Write_Console_Message(String console_message) {
+void Create_New_Gas_File() {
+    Update_TimeInfo(false);
+    GasFileName = Sensor_Data.Date + ".csv";
+    digitalWrite(SD_Active_led_pin, HIGH);
+    if (!SD.exists("/" + GasFileName)) {
+        Gasfile = SD.open("/" + GasFileName, FILE_WRITE);
+        if (!Gasfile) {                                            // log file not opened
+            Console_Print("Error opening Gas file in Create New Gas File [" + String(GasFileName) + "]");
+            while (true) {
+                digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+                digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
+                delay(500);
+                Check_Red_Switch();
+            }
+        }
+        Gasfile.print(Column_Field_Names[0]);
+        Gasfile.print(",");
+        Gasfile.print(Column_Field_Names[1]);
+        Gasfile.print(",");
+        Gasfile.println("Usage");
+        Gasfile.close();
+        Gasfile.flush();
+        Global_Gas_Record_Count = 0;
+        //        Global_Data_Table_Pointer = 0;
+        digitalWrite(SD_Active_led_pin, LOW);
+        Console_Print("Gas File " + GasFileName + " created");
+    }
+    else {
+        Console_Print("Gas File " + String(GasFileName) + " already exists");
+        Prefill_Gas_Array();
+    }
+}
+void Console_Print(String console_message) {
     String saved_console_message = console_message;
     String Date = "1951/18/11";
     String Time = "00:00:00";
@@ -713,7 +942,7 @@ void Write_New_Console_Message_to_Console_File(String date, String time, String 
     digitalWrite(SD_Active_led_pin, HIGH);                          // turn the SD activity LED on
     Consolefile = SD.open("/" + ConsoleFileName, FILE_APPEND);      // open the SD file
     if (!Consolefile) {                                             // oops - file not available!
-        Write_Console_Message("Error re-opening Console file: " + String(ConsoleFileName));
+        Console_Print("Error re-opening Console file: " + String(ConsoleFileName));
         while (true) {
             digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
             digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -729,7 +958,7 @@ void Write_New_Console_Message_to_Console_File(String date, String time, String 
         for (int x = 0; x < console_message.length(); x++) {        // reserve the current console_message
             temp_message[x] = console_message[x];
         }
-        Write_Console_Message("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+        Console_Print("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
         for (int x = 0; x < temp_message.length(); x++) {            // restore the console_message
             console_message[x] = temp_message[x];
         }
@@ -760,42 +989,42 @@ void Add_New_Console_Message_to_Console_Table(String date, String time, String c
 }
 void Check_WiFi() {
     if (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
-        Write_Console_Message("WiFi Connection Failed, Attempting to Reconnect");
+        Console_Print("WiFi Connection Failed, Attempting to Reconnect");
         delay(500);
         StartWiFi(ssid, password);
     }
 }
 int StartWiFi(const char* ssid, const char* password) {
-    Write_Console_Message("WiFi Connecting to " + String(ssid));
+    Console_Print("WiFi Connecting to " + String(ssid));
     if (WiFi.status() == WL_CONNECTED) {                              // disconnect to start new wifi connection
-        Write_Console_Message("WiFi Already Connected");
-        Write_Console_Message("Disconnecting");
+        Console_Print("WiFi Already Connected");
+        Console_Print("Disconnecting");
         WiFi.disconnect(true);
-        Write_Console_Message("Disconnected");
+        Console_Print("Disconnected");
     }
     WiFi.begin(ssid, password);                                         // connect to the wifi network
     int WiFi_Status = WiFi.status();
-    Write_Console_Message("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
+    Console_Print("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     int wifi_connection_attempts = 0;                           // zero the attempt counter
     while (WiFi.status() != WL_CONNECTED) {                     // whilst it is not connected keep trying
         delay(500);
-        Write_Console_Message("Connection attempt " + String(wifi_connection_attempts));
+        Console_Print("Connection attempt " + String(wifi_connection_attempts));
         if (wifi_connection_attempts++ > 20) {
-            Write_Console_Message("Network Error, Restarting");
+            Console_Print("Network Error, Restarting");
             ESP.restart();
         }
     }
     WiFi_Status = WiFi.status();
-    Write_Console_Message("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
+    Console_Print("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     WiFi_Signal_Strength = (int)WiFi.RSSI();
-    Write_Console_Message("WiFi Signal Strength:" + String(WiFi_Signal_Strength));
-    Write_Console_Message("WiFi IP Address: " + String(WiFi.localIP().toString().c_str()));
+    Console_Print("WiFi Signal Strength:" + String(WiFi_Signal_Strength));
+    Console_Print("WiFi IP Address: " + String(WiFi.localIP().toString().c_str()));
     return true;
 }
 void StartTime() {
-    Write_Console_Message("Starting Time Server");
+    Console_Print("Starting Time Server");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Write_Console_Message("Time Server Started");
+    Console_Print("Time Server Started");
 }
 void Prefill_Array() {
     int character_count = 0;
@@ -805,7 +1034,7 @@ void Prefill_Array() {
     int prefill_Data_Table_Pointer = 0;
     Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
-    Write_Console_Message("Loading datafile from " + String(DataFileName));
+    Console_Print("Loading datafile from " + String(DataFileName));
     console.print(millis(), DEC); console.print("\t");
     File dataFile = SD.open("/" + DataFileName, FILE_READ);
     if (dataFile) {
@@ -1007,7 +1236,90 @@ void Prefill_Array() {
     }
     dataFile.close();
     console.print(" ("); console.print(Global_Data_Record_Count); console.println(")");
-    Write_Console_Message("Loaded Data Records: " + String(Global_Data_Record_Count));
+    Console_Print("Loaded Data Records: " + String(Global_Data_Record_Count));
+    SD_Led_Flash_Start_Stop(false);
+}
+void Prefill_Gas_Array() {
+    int character_count = 0;
+    char Field[3];
+    int gasfieldNo = 0;
+    char gastemp;
+    int prefill_Gas_Table_Pointer = 0;
+    Global_Gas_Table_Pointer = 0;
+    SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
+    Console_Print("Loading gas file from " + String(GasFileName));
+    console.print(millis(), DEC); console.print("\t");
+    File gasFile = SD.open("/" + GasFileName, FILE_READ);
+    if (gasFile) {
+        while (gasFile.available()) {                                           // throw the first row, column headers, away
+            gastemp = gasFile.read();
+            if (gastemp == '\n') break;
+        }
+        while (gasFile.available()) {                                           // do while there are data available
+            Flash_SD_LED();                                                     // flash the sd led
+            gastemp = gasFile.read();
+            Field[character_count++] = gastemp;                            // add it to the csvfield string
+            if (gastemp == ',' || gastemp == '\n') {                                  // look for end of field
+                Field[character_count - 1] = '\0';                           // insert termination character where the ',' or '\n' was
+                switch (gasfieldNo) {
+                case 0: {
+                    strncpy(gas_readings_table[prefill_Gas_Table_Pointer].field.ldate, Field, sizeof(gas_readings_table[prefill_Gas_Table_Pointer].field.ldate));       // Date
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array ldate from file: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].ldate);
+#ifdef DISPLAY_PREFILL_GAS_ARRAY_VALUES_COLLECTED
+                    console.print(millis(), DEC);
+                    console.print("\tPrefill_Gas_Array [0] Date: ");
+                    console.println(gas_readings_table[prefill_Gas_Table_Pointer].field.ldate);
+#endif
+                    break;
+                }
+                case 1: {
+                    strncpy(gas_readings_table[prefill_Gas_Table_Pointer].field.ltime, Field, sizeof(gas_readings_table[prefill_Gas_Table_Pointer].field.ltime));       // Time
+                    //                    console.print(millis(), DEC); console.print("\tPrefill_Array ltime from file: ");
+                    //                    console.println(readings_table[Data_Table_Pointer].ltime);
+#ifdef DISPLAY_PREFILL_GAS_ARRAY_VALUES_COLLECTED
+                    console.print(millis(), DEC); console.print("\tPrefill_Array [1] Time: ");
+                    console.println(readings_table[prefill_Data_Table_Pointer].field.ltime);
+#endif
+                    break;
+                }
+                case 2: {
+                    gas_readings_table[prefill_Gas_Table_Pointer].field.gas_usage = (double)atof(Field);
+                    break;
+                }
+                default: {
+                    break;
+                }
+                }
+                gasfieldNo++;
+                Field[0] = '\0';
+                character_count = 0;
+            }
+            if (gastemp == '\n') {                                         // at this point the obtained record has been saved in the table
+                // end of sd data row
+                Update_Webpage_Gas_Variables_from_Table(prefill_Gas_Table_Pointer);             // update the web variables with the record just saved
+                prefill_Gas_Table_Pointer++;                               // increment the table array pointer
+                Global_Gas_Record_Count++;                                 // increment the running record toral
+                console.print(".");
+                if ((Global_Gas_Record_Count % 400) == 0) {
+                    console.print(" (");
+                    console.print(Global_Gas_Record_Count);
+                    console.println(")");
+                    console.print(millis(), DEC);
+                    console.print("\t");
+                    digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
+                }
+                if (prefill_Gas_Table_Pointer > gas_table_size) {         // if pointer is greater than table size
+                    Shuffle_Gas_Table();
+                    prefill_Gas_Table_Pointer = gas_table_size;
+                }
+                gasfieldNo = 0;
+            } // end of end of line detected
+        } // end of while
+    }
+    gasFile.close();
+    console.print(" ("); console.print(Global_Gas_Record_Count); console.println(")");
+    Console_Print("Loaded Gas Records: " + String(Global_Gas_Record_Count));
     SD_Led_Flash_Start_Stop(false);
 }
 void Shuffle_Data_Table() {
@@ -1031,6 +1343,12 @@ void Shuffle_Data_Table() {
         readings_table[i].field.wind_speed = readings_table[i + 1].field.wind_speed;                        // [16] wind speed
         readings_table[i].field.wind_direction = readings_table[i + 1].field.wind_direction;                // [17] wind direction
         strncpy(readings_table[i].field.weather_description, readings_table[i + 1].field.weather_description, sizeof(readings_table[i].field.weather_description));// [18] weather description
+    }
+}
+void Shuffle_Gas_Table() {
+    for (int i = 0; i < gas_table_size - 1; i++) {           // shuffle the rows up, losing row 0, make row [table_size] free
+        strncpy(gas_readings_table[i].field.ldate, gas_readings_table[i + 1].field.ldate, sizeof(gas_readings_table[i].field.ldate));                           // [0]  date
+        strncpy(gas_readings_table[i].field.ltime, gas_readings_table[i + 1].field.ltime, sizeof(gas_readings_table[i].field.ltime));                           // [1]  time
     }
 }
 void Update_Webpage_Variables_from_Current_Data_Record() {
@@ -1093,7 +1411,15 @@ void Update_Webpage_Variables_from_Current_Data_Record() {
     // ----------------------------------------------------------------------------------------------------------------
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < critical_SD_freespace) {
-        Write_Console_Message("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+        Console_Print("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
+    }
+}
+void Update_Webpage_Variables_from_Current_Gas_Record() {
+    date_of_latest_gas_pulse = Current_Gas_Record.field.ldate;
+    time_of_latest_gas_pulse = Current_Gas_Record.field.ltime;
+    SD_freespace_double = (double)SD_freespace / 1000000;
+    if (SD_freespace < critical_SD_freespace) {
+        Console_Print("\tWARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
     }
 }
 void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
@@ -1122,6 +1448,10 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     latest_wind_direction = readings_table[Data_Table_Pointer].field.wind_direction;
     latest_weather_description = readings_table[Data_Table_Pointer].field.weather_description;
 }
+void Update_Webpage_Gas_Variables_from_Table(int Gas_Table_Pointer) {
+    date_of_latest_gas_pulse = String(gas_readings_table[Gas_Table_Pointer].field.ldate);
+    time_of_latest_gas_pulse = String(gas_readings_table[Gas_Table_Pointer].field.ltime);
+}
 void Prefill_Console_Array() {
     int console_character_count = 0;
     char console_txtField[120];
@@ -1130,7 +1460,7 @@ void Prefill_Console_Array() {
     Global_Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);
     File consoleFile = SD.open("/" + ConsoleFileName, FILE_READ);
-    Write_Console_Message("Loading console file from " + String(ConsoleFileName));
+    Console_Print("Loading console file from " + String(ConsoleFileName));
     if (consoleFile) {
         console.print(millis(), DEC); console.print("\t");
         while (consoleFile.available()) {                                       // do while there are data available
@@ -1179,12 +1509,12 @@ void Prefill_Console_Array() {
     }
     consoleFile.close();
     console.print(" ("); console.print(Global_Console_Record_Count); console.println(")");
-    Write_Console_Message("Loaded Console Records: " + String(Global_Console_Record_Count));
+    Console_Print("Loaded Console Records: " + String(Global_Console_Record_Count));
     SD_Led_Flash_Start_Stop(false);
 }
 void Display() {
     double maximum_amperage = 0;
-    Write_Console_Message("Web Display of Graph Requested via Webpage");
+    Console_Print("Web Display of Graph Requested via Webpage");
     Page_Header(true, "Energy Usage Monitor");
     // <script> -------------------------------------------------------------------------------------------------------
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
@@ -1240,8 +1570,65 @@ void Display() {
     Page_Footer();
     lastcall = "display";
 }
+void Display_Gas() {
+    Console_Print("Web Display of Gas Graph Requested via Webpage");
+    Page_Header(true, "Gas Usage Monitor");
+    // <script> -------------------------------------------------------------------------------------------------------
+    webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
+    webpage += F("<script type=\"text/javascript\">");
+    webpage += F("google.charts.load('current', {packages: ['corechart', 'line']});");
+    webpage += F("google.setOnLoadCallback(drawChart);");
+    webpage += F("google.charts.load('current', {'packages': ['bar'] });");
+    webpage += F("google.charts.setOnLoadCallback(drawChart);");
+    webpage += F("function drawChart() {");
+    webpage += F("var data=new google.visualization.DataTable();");
+    webpage += F("data.addColumn('timeofday', 'Time');");
+    webpage += F("data.addColumn('volume', 'Volume');");
+    webpage += F("data.addRows([");
+    for (int i = 0; i < (Global_Gas_Table_Pointer); i++) {
+        if (String(gas_readings_table[i].field.ltime) != "") {                  // if the ltime field contains data
+            for (int y = 0; y < 8; y++) {                               // replace the ":"s in ltime with ","
+                if (gas_readings_table[i].field.ltime[y] == ':') {
+                    gas_readings_table[i].field.ltime[y] = ',';
+                }
+            }
+            webpage += "[[";
+            webpage += String(gas_readings_table[i].field.ltime) + "],";
+            webpage += String(gas_readings_table[i].field.gas_usage, 1) + "]";
+            if (gas_readings_table[i].field.gas_usage > Maximum_Gas_Usage) Maximum_Gas_Usage = gas_readings_table[i].field.gas_usage;
+            if (i != Global_Gas_Table_Pointer) webpage += ",";    // do not add a "," to the last record
+        }
+    }
+    webpage += "]);\n";
+    webpage += F("var options = {");
+    webpage += F("title:'Gas Consumption");
+    webpage += " (logarithmic scale)";
+    webpage += F("',titleTextStyle:{fontName:'Arial', fontSize:20, color: 'DodgerBlue'},");
+    webpage += F("legend:{position:'bottom'},colors:['red'],backgroundColor:'#F3F3F3',chartArea: {width:'80%', height:'80%'},");
+    webpage += F("hAxis:{slantedText:true,slantedTextAngle:90,titleTextStyle:{width:'100%',color:'Purple',bold:true,fontSize:16},");
+    webpage += F("gridlines:{color:'#333'},showTextEvery:1");
+    webpage += F("},");
+    webpage += F("vAxes:");
+    webpage += F("{0:{viewWindowMode:'explicit',gridlines:{color:'black'}, viewWindow:{");
+    webpage += F("min:0");
+    webpage += F(",max:");
+    webpage += String((Maximum_Gas_Usage + Maximum_Gas_Usage / 10), 3);
+    webpage += F("}, ");
+    webpage += F("scaleType: '");
+    webpage += "log";
+    webpage += F("', title : 'Volume (m/s)', format : '##.###'}, ");
+    webpage += F("}, ");
+    webpage += F("series:{0:{targetAxisIndex:0},curveType:'none'},};");
+    webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));chart.draw(data, options);");
+    webpage += F("}");
+    webpage += F("</script>");
+    // </script> ------------------------------------------------------------------------------------------------------
+    webpage += F("<div id='line_chart' style='width:960px; height:600px'></div>");
+    Page_Footer();
+    lastcall = "display";
+}
 void Web_Reset() {
-    Write_Console_Message("Web Reset of Processor Requested via Webpage");
+    Console_Print("Web Reset of Processor Requested via Webpage");
     ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
@@ -1278,7 +1665,6 @@ void Page_Header(bool refresh, String Header) {
     webpage += F("li{float:left;}");
     webpage += F("li a{display:block;text-align:center;padding:5px 25px;text-decoration:none;}");
     webpage += F("li a:hover{background-color:#FFFFFF;}");
-    //                                #31c1f9
     webpage += F("h1{background-color:White;}");
     webpage += F("body{width:");
     webpage += site_width;
@@ -1302,6 +1688,7 @@ void Page_Footer() {
     webpage += F("<li><a href='/DeleteFiles'>Delete Files</a></li>");
     webpage += F("<li><a href='/Reset'>Reset Processor</a></li>");
     webpage += F("<li><a href='/ConsoleShow'>Show Console</a></li>");
+    webpage += F("<li><a href='/Gas Usage'>Show Gas Usage</a></li>");
     // </ul> end ------------------------------------------------------------------------------------------------------
     webpage += F("</ul>");
     // <footer> start -------------------------------------------------------------------------------------------------
@@ -1335,7 +1722,7 @@ void Page_Footer() {
 }
 void Information() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    Write_Console_Message("Web Display of Information Requested via Webpage");
+    Console_Print("Web Display of Information Requested via Webpage");
     String ht = String(date_of_highest_voltage + " at " + time_of_highest_voltage + " as " + String(highest_voltage) + " volts");
     //    console.print(millis(), DEC); console.print("\tHT String: "); console.println(ht);
     String lt = String(date_of_lowest_voltage + " at " + time_of_lowest_voltage + " as " + String(lowest_voltage) + " volts");
@@ -1472,13 +1859,19 @@ void Information() {                                                 // Display 
     webpage += F("'>Weather: ");
     webpage += String(latest_weather_description);
     webpage += "</span></strong></p>";
+    // Gas Usage -----------------------------------------------------------------------------
+    webpage += F("<p ");
+    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:12px;'");
+    webpage += F("'>Date of Last Gas Pulse: ");
+    webpage += date_of_latest_gas_pulse + " at " + time_of_latest_gas_pulse;
+    webpage += "</span></strong></p>";
     // ----------------------------------------------------------------------------------------------------------------
     datafile.close();
     Page_Footer();
 }
 void Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    Write_Console_Message("Download of Files Requested via Webpage");
+    Console_Print("Download of Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Download Files");
     for (i = 1; i < file_count; i++) {
         webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
@@ -1489,14 +1882,14 @@ void Download_Files() {
 }
 void Download_File() {                                                          // download the selected file
     String fileName = server.arg("file");
-    Write_Console_Message("Download of File " + fileName + " Requested via Webpage");
+    Console_Print("Download of File " + fileName + " Requested via Webpage");
     File datafile = SD.open("/" + fileName, FILE_READ);    // Now read data from FS
     if (datafile) {                                             // if there is a file
         if (datafile.available()) {                             // If data is available and present
             String contentType = "application/octet-stream";
             server.sendHeader("Content-Disposition", "attachment; filename=" + fileName);
             if (server.streamFile(datafile, contentType) != datafile.size()) {
-                Write_Console_Message("Sent less data (" + String(server.streamFile(datafile, contentType)) + ") from " + fileName + " than expected (" + String(datafile.size()) + ")");
+                Console_Print("Sent less data (" + String(server.streamFile(datafile, contentType)) + ") from " + fileName + " than expected (" + String(datafile.size()) + ")");
             }
         }
     }
@@ -1505,7 +1898,7 @@ void Download_File() {                                                          
 }
 void Delete_Files() {                                                           // allow the cliet to select a file for deleti
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
-    Write_Console_Message("Delete Files Requested via Webpage");
+    Console_Print("Delete Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Delete Files");
 #ifndef ALLOW_WORKING_FILE_DELETION
     if (file_count > 3) {
@@ -1539,7 +1932,7 @@ void Del_File() {                                                       // web r
     if (fileName != ("/" + DataFileName)) {                            // do not delete the current file
 #endif
         SD.remove(fileName);
-        Write_Console_Message(DataFileName + " Removed");
+        Console_Print(DataFileName + " Removed");
 #ifndef ALLOW_WORKING_FILE_DELETION
     }
 #endif
@@ -1572,7 +1965,7 @@ void Del_File() {                                                       // web r
     Page_Footer();
 }
 void Console_Show() {
-    Write_Console_Message("Web Display of Console Messages Requested via Webpage");
+    Console_Print("Web Display of Console Messages Requested via Webpage");
     Page_Header(true, "Console Messages");
     for (int x = 0; x < Global_Console_Table_Pointer; x++) {
         webpage += F("<p ");
@@ -1602,7 +1995,7 @@ int Count_Files_on_SD_Drive() {
             if (datafile) {                                         // if there is a file
                 FileNames[file_count] = filename;
                 //                console_message = "File " + String(file_count) + " filename " + String(filename);
-                //                Write_Console_Message(console_message);
+                //                Console_Print(console_message);
                 file_count++;                                       // increment the file count
             }
             datafile.close(); // close the file:
@@ -1616,19 +2009,19 @@ int Count_Files_on_SD_Drive() {
     return (file_count);
 }
 void Wipe_Files() {                            // selected by pressing combonation of buttons
-    Write_Console_Message("Start of Wipe Files Request by Switch");
+    Console_Print("Start of Wipe Files Request by Switch");
     String filename;
     File root = SD.open("/");                                       //  Open the root directory
     while (true) {
         File entry = root.openNextFile();                           //  get the next file
         if (entry) {
             filename = entry.name();
-            Write_Console_Message("Removing " + filename);
+            Console_Print("Removing " + filename);
             SD.remove(entry.name());                                //  delete the file
         }
         else {
             root.close();
-            Write_Console_Message("All files removed from root directory, rebooting");
+            Console_Print("All files removed from root directory, rebooting");
             ESP.restart();
         }
     }
@@ -1654,7 +2047,7 @@ void Receive(int field) {
     do {
         while (!RS485_Port.available()) {                                       // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {                   // no data received within 500 ms so timeout
-                Write_Console_Message("No Reply from RS485 within 500 ms");
+                Console_Print("No Reply from RS485 within 500 ms");
                 while (true) {                                                          // wait for reset to be pressed
                     digitalWrite(Running_led_pin, !digitalRead(Running_led_pin));
                     digitalWrite(SD_Active_led_pin, !digitalRead(SD_Active_led_pin));
@@ -1830,7 +2223,7 @@ void Receive(int field) {
 void Check_Green_Switch() {
     Green_Switch.update();
     if (Green_Switch.fell()) {
-        Write_Console_Message("Green Button Pressed - No Action Assigned");
+        Console_Print("Green Button Pressed - No Action Assigned");
     }
 }
 void Check_Blue_Switch() {
@@ -1838,7 +2231,7 @@ void Check_Blue_Switch() {
     char SD_led_state = 0;
     Blue_Switch.update();                                                   // update wipe switch
     if (Blue_Switch.fell()) {
-        Write_Console_Message("Blue Button Pressed");
+        Console_Print("Blue Button Pressed");
         Running_led_state = digitalRead(Running_led_pin);                   // save the current state of the leds
         SD_led_state = digitalRead(SD_Active_led_pin);
         do {
@@ -1848,7 +2241,7 @@ void Check_Blue_Switch() {
             if (Yellow_Switch.fell()) Yellow_Switch_Pressed = true;         // Blue switch + Yellow switch = wipe directory
             Red_Switch.update();                                            // reset will cancel the Wipe
             if (Red_Switch.fell()) {
-                Write_Console_Message("Red Button Pressed");
+                Console_Print("Red Button Pressed");
                 ESP.restart();
             }
             delay(150);
@@ -1857,9 +2250,9 @@ void Check_Blue_Switch() {
             delay(150);
         } while (!Yellow_Switch_Pressed);
         if (Yellow_Switch_Pressed) {
-            Write_Console_Message("Yellow Button Pressed");
+            Console_Print("Yellow Button Pressed");
             digitalWrite(SD_Active_led_pin, HIGH);
-            Write_Console_Message("Wiping Files");
+            Console_Print("Wiping Files");
             Wipe_Files();                                                   // delete all files on the SD, ReYellow_Switch_Pressed when compete
         }
         digitalWrite(Running_led_pin, Running_led_state);                   // restore the previous state of the leds
@@ -1872,18 +2265,18 @@ void Drive_Running_Led() {
 void Check_Red_Switch() {
     Red_Switch.update();
     if (Red_Switch.fell()) {
-        Write_Console_Message("Red Button Pressed");
+        Console_Print("Red Button Pressed");
         ESP.restart();
     }
 }
 void Check_Yellow_Switch() {
     Yellow_Switch.update();
     if (Yellow_Switch.fell()) {
-        Write_Console_Message("Yellow Button Pressed");
+        Console_Print("Yellow Button Pressed");
         Yellow_Switch_Pressed = true;
     }
     if (Yellow_Switch.rose()) {
-        Write_Console_Message("Yellow Button Released");
+        Console_Print("Yellow Button Released");
         Yellow_Switch_Pressed = false;
     }
     return;
@@ -1927,12 +2320,12 @@ void Update_TimeInfo(bool format) {
     int connection_attempts = 0;
     String temp;
     while (!getLocalTime(&timeinfo)) {                                                  // get date and time from ntpserver
-        Write_Console_Message("Attempting to Get Date " + String(connection_attempts));
+        Console_Print("Attempting to Get Date " + String(connection_attempts));
         delay(500);
         Check_Red_Switch();
         connection_attempts++;
         if (connection_attempts > 20) {
-            Write_Console_Message("Time Network Error, Restarting");
+            Console_Print("Time Network Error, Restarting");
             ESP.restart();
         }
     }
@@ -1943,7 +2336,6 @@ void Update_TimeInfo(bool format) {
     Sensor_Data.Minute = timeinfo.tm_min;
     Sensor_Data.Second = timeinfo.tm_sec;
     // ----------------------------------------------------------------------------------------------------------------
-
     Sensor_Data.Date = String(Sensor_Data.Year);            //  1951
     if (format) {
         Sensor_Data.Date += "/";                            //  1951/
