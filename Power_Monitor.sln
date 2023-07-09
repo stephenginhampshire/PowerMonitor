@@ -9,6 +9,22 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FS-2.0.0", "Libraries\FS\2.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HTTPClient-2.0.0", "Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems", "{A050FABA-F8F8-4D2D-916D-31C32D07AF94}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArduinoSort-master", "Libraries\ArduinoSort-master\ArduinoSort-master.vcxitems", "{0647AA68-E222-4E3C-8D56-D5B20B37E73C}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SD", "Libraries\SD\SD.vcxitems", "{61A95194-5440-41EA-9338-F8A8BECC06FC}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SPI", "Libraries\SPI\SPI.vcxitems", "{0B196FCA-4037-42EE-AC60-C5BBBBB6BB68}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WiFi", "Libraries\WiFi\WiFi.vcxitems", "{748B0307-7053-4344-9B29-55324835F82C}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Bounce2", "Libraries\Bounce2\Bounce2.vcxitems", "{F3E6947E-1BDC-4B2C-884E-BBCF3269EB2B}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WebServer", "Libraries\WebServer\WebServer.vcxitems", "{63C5A973-79BA-4AA7-B252-E764BA8DFEC4}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WiFiClientSecure", "Libraries\WiFiClientSecure\WiFiClientSecure.vcxitems", "{DAAB106E-0E0E-4B91-896F-184DA309BB41}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ESP32Time-2.0.0", "Libraries\ESP32Time-2.0.0\ESP32Time-2.0.0.vcxitems", "{CBE681E4-6209-4480-8914-1A8E76B832D6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x86 = Debug|x86
@@ -27,9 +43,25 @@ Global
 		SolutionGuid = {79746370-D6F8-420E-861C-2D97DE0C3047}
 	EndGlobalSection
 	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\ArduinoSort-master\ArduinoSort-master.vcxitems*{0647aa68-e222-4e3c-8d56-d5b20b37e73c}*SharedItemsImports = 9
+		Libraries\SPI\SPI.vcxitems*{0b196fca-4037-42ee-ac60-c5bbbbb6bb68}*SharedItemsImports = 9
+		Libraries\SD\SD.vcxitems*{61a95194-5440-41ea-9338-f8a8becc06fc}*SharedItemsImports = 9
+		Libraries\WebServer\WebServer.vcxitems*{63c5a973-79ba-4aa7-b252-e764ba8dfec4}*SharedItemsImports = 9
+		Libraries\WiFi\WiFi.vcxitems*{748b0307-7053-4344-9b29-55324835f82c}*SharedItemsImports = 9
 		Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems*{a050faba-f8f8-4d2d-916d-31c32d07af94}*SharedItemsImports = 9
+		Libraries\ArduinoSort-master\ArduinoSort-master.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\Bounce2\Bounce2.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\ESP32Time-2.0.0\ESP32Time-2.0.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 		Libraries\FS\2.0.0\FS\FS-2.0.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 		Libraries\HTTPClient\2.0.0\HTTPClient\HTTPClient-2.0.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\SD\SD.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\SPI\SPI.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\WebServer\WebServer.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\WiFiClientSecure\WiFiClientSecure.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\WiFi\WiFi.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\ESP32Time-2.0.0\ESP32Time-2.0.0.vcxitems*{cbe681e4-6209-4480-8914-1a8e76b832d6}*SharedItemsImports = 9
+		Libraries\WiFiClientSecure\WiFiClientSecure.vcxitems*{daab106e-0e0e-4b91-896f-184da309bb41}*SharedItemsImports = 9
 		Libraries\FS\2.0.0\FS\FS-2.0.0.vcxitems*{eb22bd68-67db-4a5c-8dee-3d7b2d00c9ab}*SharedItemsImports = 9
+		Libraries\Bounce2\Bounce2.vcxitems*{f3e6947e-1bdc-4b2c-884e-bbcf3269eb2b}*SharedItemsImports = 9
 	EndGlobalSection
 EndGlobal

@@ -6,7 +6,7 @@
 			All non-arduino files created by visual micro and all visual studio project or solution files can be freely deleted and are not required to compile a sketch (do not delete your own code!).
 			Note: debugger breakpoints are stored in '.sln' or '.asln' files, knowledge of last uploaded breakpoints is stored in the upload.vmps.xml file. Both files are required to continue a previous debug session without needing to compile and upload again
 	
-	Hardware: ESP32-WROOM-DA Module                                                                                               (esp32_esp32da), Platform=esp32, Package=esp32
+	Hardware: ESP32-WROOM-DA Module (esp32_esp32da), Platform=esp32, Package=esp32
 */
 
 #if defined(_VMICRO_INTELLISENSE)
@@ -29,11 +29,9 @@
 #define ARDUINO_ARCH_ESP32 1
 #define ARDUINO_BOARD "ESP32_WROOM_DA"
 #define ARDUINO_VARIANT "esp32da"
-#define ARDUINO_PARTITION_min_spiffs 1
+#define ARDUINO_PARTITION_default 1
 #define ESP32 1
 #define CORE_DEBUG_LEVEL 0
-#define ARDUINO_RUNNING_CORE 1
-#define ARDUINO_EVENT_RUNNING_CORE 1
 #define ARDUINO_USB_CDC_ON_BOOT 0
 #define __cplusplus 201103L
 
@@ -58,7 +56,7 @@
 //#define _STD_BEGIN
 //#define EMIT
 #define WARNING
-#define _Lockit
+//#define _Lockit
 #define __CLR_OR_THIS_CALL
 #define C4005
 //#define _NEW
@@ -87,10 +85,12 @@ typedef int __gnuc_va_list;
 typedef unsigned char byte;
 extern "C" void __cxa_pure_virtual() {;}
 
-typedef long __INTPTR_TYPE__ ;
+//typedef long __INTPTR_TYPE__ ;
+#define __INTPTR_TYPE__ unsigned int
 typedef long __UINTPTR_TYPE__ ;
 //typedef long __SIZE_TYPE__ 	;
 #define __SIZE_TYPE__ unsigned int
+#define __INT32_TYPE__ long
 typedef long __PTRDIFF_TYPE__;
 
 typedef long pthread_t;
@@ -110,6 +110,9 @@ public:
 	// Send a Message to the Serial Monitor via WiFi Connection 
 	void sendUserMessage(const char* theMessage) {};
 } MicroDebug;
+
+class Lockit { public: int _Lockit() {} };
+
 #include <arduino.h>
 #include <pins_arduino.h> 
 
@@ -122,6 +125,6 @@ public:
 #define READ_PERI_REG(addr)
 // Write Value to Register
 #define WRITE_PERI_REG(addr,val)
-#include "Power_Monitor.ino"
+#include "..\Power_Monitor.ino"
 #endif
 #endif
