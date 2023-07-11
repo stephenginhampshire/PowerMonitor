@@ -14,25 +14,25 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
     <Filter Include="src">
-      <UniqueIdentifier>{a4f6849a-cc73-44ff-96b1-ec1306b335a3}</UniqueIdentifier>
+      <UniqueIdentifier>{35c7e2ad-46d8-4718-a94e-ef3be664463c}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly">
-      <UniqueIdentifier>{c8804b51-3717-43d5-907e-8230d10b1792}</UniqueIdentifier>
+      <UniqueIdentifier>{048050ce-8dfb-4f69-8b26-d4fa93dbb0aa}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly\core">
-      <UniqueIdentifier>{c792eef2-80e6-4936-a015-debabf772f83}</UniqueIdentifier>
+      <UniqueIdentifier>{80ac1eaf-917a-4005-a469-b17f0c31a7e6}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly\core\apps">
-      <UniqueIdentifier>{5b48970c-1424-4ae9-a194-1868a03308fa}</UniqueIdentifier>
+      <UniqueIdentifier>{d20fd050-c1ba-456d-9d26-11bdaa85502f}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly\core\apps\sntp">
-      <UniqueIdentifier>{57cee775-64a4-459f-b1f3-1993a2557ebe}</UniqueIdentifier>
+      <UniqueIdentifier>{53b5bb92-0708-4f1b-8430-df2edb933a29}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly\core\libb64">
-      <UniqueIdentifier>{4008d13a-215c-4493-b993-8a978f5e5387}</UniqueIdentifier>
+      <UniqueIdentifier>{0a5fbf44-1089-4a64-a204-6ca9bf201394}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\_micro-api-readonly\libraries">
-      <UniqueIdentifier>{30722965-dded-4612-afd0-ac4797f266ab}</UniqueIdentifier>
+      <UniqueIdentifier>{fe593620-8f9f-4c96-b7b5-ed3e007d9252}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -206,6 +206,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Power_Monitor.ino" />
     <ClCompile Include="..\..\..\..\AppData\Local\arduino15\packages\esp32\hardware\esp32\2.0.4\cores\esp32\base64.cpp">
       <Filter>src\_micro-api-readonly\core</Filter>
     </ClCompile>
@@ -338,6 +339,5 @@
     <ClCompile Include="..\..\..\..\AppData\Local\arduino15\packages\esp32\hardware\esp32\2.0.4\cores\esp32\WString.cpp">
       <Filter>src\_micro-api-readonly\core</Filter>
     </ClCompile>
-    <ClCompile Include="Power_Monitor.ino" />
   </ItemGroup>
 </Project>

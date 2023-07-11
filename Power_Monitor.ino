@@ -36,11 +36,11 @@ String version = "V12.0";                       // software version number, show
 // compiler directives ------------------------------------------------------------------------------------------------
 //#define PRINT_PREFILL_DATA_VALUES           //
 //#define PRINT_SHUFFLING_DATA_VALUES
-#define PRINT_MONTH_DATA_VALUES
+//#define PRINT_MONTH_DATA_VALUES
 // definitions --------------------------------------------------------------------------------------------------------
 #define console Serial
 #define RS485_Port Serial2
-#define WDT_TIMEOUT 3                           // 3 second watchdog timeout
+#define WDT_TIMEOUT 5   // 5 second watchdog timeout
 // includes -----------------------------------------------------------------------------------------------------------
 #include <vfs_api.h>
 #include <FSImpl.h>
@@ -86,9 +86,9 @@ constexpr long RS485_Baudrate = 9600;                           // baud rate of 
 // ESP32 Pin Definitions ----------------------------------------------------------------------------------------------
 constexpr int Blue_Switch_pin = 32;
 constexpr int Red_Switch_pin = 33;
-constexpr int Green_Switch_pin = 27;
+//constexpr int Green_Switch_pin = 0;
 constexpr int Green_led_pin = 26;
-constexpr int Yellow_Switch_pin = 0;
+constexpr int Yellow_Switch_pin = 27;
 constexpr int Blue_led_pin = 4;
 constexpr int RS485_Enable_pin = 22;
 constexpr int RS485_TX_pin = 17;
@@ -147,7 +147,7 @@ constexpr int Days_n_Month[13][2] = {
 // Instantiations -----------------------------------------------------------------------------------------------------
 struct tm timeinfo;
 Bounce Red_Switch = Bounce();
-Bounce Green_Switch = Bounce();
+//Bounce Green_Switch = Bounce();
 Bounce Blue_Switch = Bounce();
 Bounce Yellow_Switch = Bounce();
 Bounce Gas_Switch = Bounce();
@@ -210,7 +210,6 @@ union Data_Record_Union {
 };
 Data_Record_Union Current_Data_Record;
 Data_Record_Union Month_Data_Record;
-//String Data_File_Values_19 = "                                   ";     // [24] space for the read weather descriptionconstexpr int Data_Table_Size = 60;             // number of data table rows (5 minutes worth)
 int Data_Table_Pointer = 0;              // points to the next index of Data_Table
 int Data_Record_Count = 0;               // running total of records written to Data Table
 // Data Table Constants and Variables ---------------------------------------------------------------------------------
@@ -245,12 +244,17 @@ union Data_Table_Union {
 Data_Table_Union Readings_Table[Data_Table_Size];
 unsigned long Data_Record_Start_Time = 0;
 unsigned long First_Data_Record_Start_Time = 0;
-/// MonthFile Constants and Variables ----------------------------------------------------------------------------------
+unsigned long Month_Data_Record_Start_Time = 0;
+unsigned long First_Month_Data_Record_Start_Time = 0;
+/// MonthFile Constants and Variables ---------------------------------------------------------------------------------
 File MonthFile;
 String MonthFileName = "M202301";           // .cvs
-// DateTimeFile Constants and Variables -------------------------------------------------------------------------------
-//File DateTimeFile;
-//String DateTimeFileName = "DT01";           // .txt
+String Console_Messages_while_not_Disk_Ready[100];
+int Console_Message_wndr_count = 0;
+int Month_Data_Record_Count = 0;
+// ConsoleFile Constants and Variables --------------------------------------------------------------------------------
+File ConsoleFile;
+String ConsoleFileName = "Console";
 // KWS Request Field Numbers ------------------------------------------------------------------------------------------
 constexpr int Request_Voltage = 0;
 constexpr int Request_Amperage = 1;
@@ -286,7 +290,7 @@ double temperature_calibration = (double)16.5 / (double)22.0;   // temperature r
 String Last_Boot_Time_With = "12:12:12";
 String Last_Boot_Date_With = "2022/29/12";
 int This_Day = 0;
-double Previous_Gas_Volume = 0;
+double Cumulative_Gas_Volume = 0;
 
 // Lowest Voltage -----------------------------------------------------------------------------------------------------
 double Lowest_Voltage = 0;
@@ -359,11 +363,13 @@ uint64_t critical_SD_freespace = 0;
 double SD_freespace_double = 0;
 String temp_message;
 bool Setup_Complete = false;
+bool Disk_Ready = false;
 char complete_weather_api_link[120];
 int i = 0;
 char Parse_Output[25];
 bool New_Day_File_Required = true;
 bool Month_File_Required = true;
+String csv_file_names[31];                              // possibly 31 csv files
 unsigned long sd_off_time = 0;
 unsigned long sd_on_time = 0;
 int WiFi_Signal_Strength = 0;
@@ -378,11 +384,11 @@ void setup() {
     console.print(millis(), DEC); console.println("\tCommencing Setup");
     console.print(millis(), DEC); console.println("\tBooting - Commencing Setup");
     console.print(millis(), DEC); console.println("\tConfiguring Watchdog Timer");
-    //    esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
-    //    esp_task_wdt_add(NULL); //add current thread to WDT watch
+    esp_task_wdt_init(WDT_TIMEOUT, true);                                       //enable panic so ESP32 restarts
+    esp_task_wdt_add(NULL);                                                     //add current thread to WDT watch
     console.print(millis(), DEC); console.println("\tConfiguring IO");
     pinMode(Blue_led_pin, OUTPUT);
-    pinMode(Green_Switch_pin, INPUT_PULLUP);
+    //    pinMode(Green_Switch_pin, INPUT_PULLUP);
     pinMode(Red_Switch_pin, INPUT_PULLUP);
     pinMode(Blue_Switch_pin, INPUT_PULLUP);
     pinMode(Yellow_Switch_pin, INPUT_PULLUP);
@@ -390,16 +396,16 @@ void setup() {
     pinMode(Gas_Switch_pin, INPUT_PULLUP);
     Gas_Switch.attach(Gas_Switch_pin);
     Red_Switch.attach(Red_Switch_pin);     // setup defaults for debouncing switches
-    Green_Switch.attach(Green_Switch_pin);
+    //    Green_Switch.attach(Green_Switch_pin);
     Blue_Switch.attach(Blue_Switch_pin);
     Yellow_Switch.attach(Yellow_Switch_pin);
     Gas_Switch.interval(100);
     Red_Switch.interval(5);                  // sets debounce time
-    Green_Switch.interval(5);
+    //    Green_Switch.interval(5);
     Blue_Switch.interval(5);
     Gas_Switch.update();
     Red_Switch.update();
-    Green_Switch.update();
+    //    Green_Switch.update();
     Blue_Switch.update();
     digitalWrite(0, HIGH);
     digitalWrite(Green_led_pin, LOW);
@@ -411,17 +417,18 @@ void setup() {
     console.print(millis(), DEC); console.println("\tStarting Server");
     server.begin();                                 // Start Webserver
     console.print(millis(), DEC); console.println("\tServer Started");
-    server.on("/", Display);                        // nothing specified so display main web page
-    server.on("/Display", Display);                 // display the main web page
-    server.on("/Information", Information);         // display information
-    server.on("/DownloadFiles", Download_Files);    // select a file to download
-    server.on("/GetFile", Download_File);           // download the selectedfile
-    server.on("/DeleteFiles", Delete_Files);        // select a file to delete
-    server.on("/DelFile", Del_File);                // delete the selected file
-    server.on("/Reset", Web_Reset);                 // reset the orocessor from the webpage
+    server.on("/", I_Display);                        // nothing specified so display main web page
+    server.on("/Display", I_Display);                 // display the main web page
+    server.on("/Information", I_Information);         // display information
+    server.on("/DownloadFiles", I_Download_Files);  // select a file to download
+    server.on("/GetFile", I_Download_File);           // download the selected file
+    server.on("/DeleteFiles", I_Delete_Files);      // select a file to delete
+    server.on("/DelFile", I_Del_File);                // delete the selected file
+    server.on("/Reset", I_Web_Reset);                 // reset the orocessor from the webpage
     RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_RX_pin, RS485_TX_pin);
     pinMode(RS485_Enable_pin, OUTPUT);
     delay(10);
+    esp_task_wdt_reset();
     if (!SD.begin(SS_pin)) {
         console.print(millis(), DEC); console.print("SD Drive Begin Failed");
         while (true) {
@@ -433,6 +440,7 @@ void setup() {
     }
     else {
         console.print(millis(), DEC); console.println("\tSD Drive Begin Succeeded");
+        Disk_Ready = true;
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
             console.print(millis(), DEC); console.println("\tNo SD Card Found");
@@ -464,11 +472,13 @@ void setup() {
         console.print(millis(), DEC); console.println("\tSD Used bytes : " + String(SD.usedBytes()));
         console.print(millis(), DEC); console.println("\tSD Card Initialisation Complete");
     }
+    esp_task_wdt_reset();
     Update_Current_TimeInfo();                                                  // update This date time info, no /s
     Last_Boot_Time_With = Current_Time_With;
     Last_Boot_Date_With = Current_Date_With;
     This_Date_With = Current_Date_With;
     This_Time_With = Current_Time_With;
+    esp_task_wdt_reset();
     Create_New_Data_File();
     console.print(millis(), DEC); console.println("\tPreparing Customised Weather Request");
     int count = 0;
@@ -502,11 +512,13 @@ void loop() {
     }
     esp_task_wdt_reset();                                   // reset the watchdog timer every loop
     Check_WiFi();                                           // check that the WiFi is still conected
-    Check_Green_Switch();                                   // check if start switch has been pressed
+    esp_task_wdt_reset();
+    //    Check_Green_Switch();                                   // check if start switch has been pressed
     Check_Blue_Switch();                                    // check if wipesd switch has been pressed
     Check_Gas_Switch();                                     // check if the gas switch sense pin has risen
     Check_NewDay();                                         // check if the date has changed
     server.handleClient();                                  // handle any messages from the website
+    esp_task_wdt_reset();
     if (millis() > last_cycle + (unsigned long)5000) {      // send requests every 5 seconds (5000 millisecods)
         console.print(millis(), DEC); console.println("\tRequesting Current Information");
         last_cycle = millis();                              // update the last read milli second reading
@@ -534,7 +546,9 @@ void loop() {
         Update_Current_TimeInfo();
         Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
         Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
+        esp_task_wdt_reset();
         Write_New_Data_Record_to_Data_File();                   // write the new record to SD Drive
+        esp_task_wdt_reset();
         Add_New_Data_Record_to_Display_Table();                 // add the record to the display table
     }// end of if millis >5000
 }
@@ -560,7 +574,7 @@ void Check_NewDay() {
     }
 }
 void Check_New_Month() {                                    // Only executed when change of day is going to happen.
-    if (Current_Date_Time_Data.field.Day == 1 && Month_File_Required == true) {   // is this the first day of the month?
+    if (Current_Date_Time_Data.field.Day == 1 && Month_File_Required == true) {   // is this the first day of the new month?
         console.print(millis(), DEC); console.print("New Month Detected");
         Month_File_Required = false;                                                // ensure this is done only once per mnnth
         Month_End_Process();
@@ -568,6 +582,83 @@ void Check_New_Month() {                                    // Only executed whe
     else {
         Month_File_Required = true;
     }
+}
+void Console_Print(String Console_Message) {
+    console.print(millis(), DEC); console.println(Console_Message);
+    if (Disk_Ready) {
+        Create_or_Open_Console_File();
+        if (!Console_Message_wndr_count) {
+            for (int x = 0; x < Console_Message_wndr_count; x++) {
+                ConsoleFile.println(Console_Messages_while_not_Disk_Ready[x]);
+            }
+            Console_Message_wndr_count = 0;
+        }
+        ConsoleFile.print(Current_Date_With);
+        ConsoleFile.print(",");
+        ConsoleFile.print(Current_Time_With);
+        ConsoleFile.print(",");
+        ConsoleFile.print(String(millis()));
+        ConsoleFile.print(",");
+        ConsoleFile.println(Console_Message);
+    }
+    else {
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] = Current_Date_With;
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] += ",";
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] += Current_Time_With;
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] += ",";
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] += String(millis());
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count] += ",";
+        Console_Messages_while_not_Disk_Ready[Console_Message_wndr_count++] += Console_Message;
+    }
+}
+void Create_or_Open_Console_File() {
+    console.print(millis(), DEC); console.print("Create the Console file " + ConsoleFileName);
+    if (!SD.exists("/" + ConsoleFileName)) {               // create the monthly file
+        ConsoleFile = SD.open("/" + ConsoleFileName, FILE_WRITE);
+        if (!ConsoleFile) {                        // log file not opened
+            console.print(millis(), DEC); console.print("Error opening Console file in Create New Console File (" + String(MonthFileName) + ")");
+            Check_Red_Switch();                 // loop waiting for red switch to restart processor
+        }
+        console.print(millis(), DEC); console.print("\tConsole File " + ConsoleFileName + " created");
+    }
+    else {
+        console.print(millis(), DEC); console.print("\tConsole File " + String(ConsoleFileName) + " already exists");     // file already exists
+        ConsoleFile = SD.open("/" + ConsoleFileName, FILE_APPEND);                                                        // open the month file for append
+        if (!ConsoleFile) {                                                                                             // log file not opened
+            console.print(millis(), DEC); console.print("Error opening Console file in Create New Console File (" + String(ConsoleFileName) + ")");
+            Check_Red_Switch();
+        }
+        console.print(millis(), DEC); console.print("console file is open for append");
+    }
+}
+void Create_or_Open_New_Month_File() {
+    console.print(millis(), DEC); console.println("\tCreate the Monthly file " + MonthFileName);
+    if (!SD.exists("/" + MonthFileName)) {               // create the monthly file
+        MonthFile = SD.open("/" + MonthFileName, FILE_WRITE);
+        if (!MonthFile) {                        // log file not opened
+            console.print(millis(), DEC); console.println("\tError opening Month file in Create New Data File (" + String(MonthFileName) + ")");
+            Check_Red_Switch();                 // loop waiting for red switch to restart processor
+        }
+        console.print(millis(), DEC); console.println("\tMonth File " + MonthFileName + " created");
+
+        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {                   // write data column headings into the SD file
+            MonthFile.print(Column_Field_Names[x]);
+            MonthFile.print(",");
+        }
+        MonthFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
+        console.print(millis(), DEC); console.println("\tColumn Titles written to new Month File");
+        Cumulative_Gas_Volume = 0;
+    }
+    else {
+        console.print(millis(), DEC); console.println("\tMonth File " + String(MonthFileName) + " already exists");     // file already exists
+        MonthFile = SD.open("/" + MonthFileName, FILE_APPEND);                                                        // open the month file for append
+        if (!MonthFile) {                                                                                             // log file not opened
+            console.print(millis(), DEC); console.println("\tError opening Month file in Create New Data File (" + String(MonthFileName) + ")");
+            Check_Red_Switch();
+        }
+        console.print(millis(), DEC); console.println("\t" + MonthFileName + "file is open for append");
+    }
+    Month_Data_Record_Count = 0;
 }
 void Month_End_Process() {
     int character_count = 0;
@@ -578,84 +669,63 @@ void Month_End_Process() {
     int file_count = 0;
     String previous_year = "0000";
     String previous_month = "00";
-    String csv_file_names[31];                              // possibly 31 csv files
     String this_file_name = "        ";
     int csv_count = 0;
-    char datatemp = 0;
+    double record_time = 0;
     // Stage 1 Create sorted file name arrays ---------------------------------------------------------------------
-    console.print(millis(), DEC); console.print("Stage 1 - Create an array with the .csv files name");
+    console.print(millis(), DEC); console.println("\tStage 1 - Create an array with the .csv files name");
     file_count = Count_Files_on_SD_Drive();                         // creates an array of filenames
+    csv_count = 0;
     for (int file = 0; file < file_count; file++) {                 // for each file name
-        this_file_name = FileNames[file];                           // take the file name
-        if (FileNames[file].indexOf(".csv", 1)) {                   // is it a .csv file
-            this_file_name = FileNames[file];                       // take the full csv file name
+        if (FileNames[file].indexOf(".csv")) {
+            this_file_name = FileNames[file];                       // take the file name
             for (int x = 0; x < 8; x++) {
                 csv_file_names[csv_count] += this_file_name[x];     // move the filename, minus the extension
             }
             csv_count++;                                            // increment the count of csv file names
         }
     }
-    console.print(millis(), DEC); console.print("\tThere are " + String(csv_count) + ".csv files");
-    console.print(millis(), DEC); console.print("\tStage 2 - Sort the .csv file names into date order");
-    sortArray(csv_file_names, --csv_count);             // sort into rising order
+    console.print(millis(), DEC); console.println("\tThere are " + String(csv_count) + ".csv files");
+    console.print(millis(), DEC); console.println("\tStage 2 - Sort the .csv file names into date order");
+    sortArray(csv_file_names, csv_count);             // sort into rising order
+    for (int x = 0; x < csv_count; x++) {
+        console.print(millis(), DEC); console.print("\t"); console.print(x); console.print(" ");  console.println(csv_file_names[x]);
+    }
     // Stage 2 ----------------------------------------------------------------------------------------------------
     Update_Current_TimeInfo();
     for (int x = 0; x < 4; x++) {
-        previous_year[x] = This_Date_With[x];
+        previous_year[x] = This_Date_With[x];           // This date with will not have changed yet
     }
     for (int x = 5; x < 7; x++) {
-        previous_month[x] = This_Date_With[x];
+        previous_month[x - 5] = This_Date_With[x];
     }
-    // Create Monthly .csv file -----------------------------------------------------------------------------------
-    MonthFileName = "M" + previous_year + previous_month + ".csv";
-    console.print(millis(), DEC); console.print("Stage 3 - Create the Monthly .csv file " + MonthFileName);
-    if (!SD.exists("/" + MonthFileName)) {               // create the monthly file
-        MonthFile = SD.open("/" + MonthFileName, FILE_WRITE);
-        if (!MonthFile) {                        // log file not opened
-            console.print(millis(), DEC); console.print("Error opening Month file in Create New Data File (" + String(MonthFileName) + ")");
-            Check_Red_Switch();
-        }
-        console.print(millis(), DEC); console.print("\tMonth File " + MonthFileName + " created");
-
-        for (int x = 0; x < Number_of_Column_Field_Names; x++) {                   // write data column headings into the SD file
-            MonthFile.print(Column_Field_Names[x]);
-            MonthFile.print(",");
-        }
-        MonthFile.println(Column_Field_Names[Number_of_Column_Field_Names]);
-        console.print(millis(), DEC); console.print("\tColumn Titles written to new Month File");
-
-    }
-    else {
-        console.print(millis(), DEC); console.print("\tMonth File " + String(MonthFileName) + " already exists");     // file already exists
-        MonthFile = SD.open("/" + MonthFileName, FILE_WRITE);
-        if (!MonthFile) {                                                                   // log file not opened
-            console.print(millis(), DEC); console.print("Error opening Month file in Create New Data File (" + String(MonthFileName) + ")");
-            Check_Red_Switch();
-        }
-        console.print("has been opened, and will remain open until all Data Files have been copied");
-    }
-    console.print(millis(), DEC); console.print("\tAmalgamating Daily .csv files into Monthly .csv file");
+    MonthFileName = "MF" + previous_year + previous_month + ".csm";                          // create name for month file
+    console.print(millis(), DEC); console.print("\tAmalgamating Daily .csv files into "); console.println(MonthFileName);
     for (int file = 0; file < csv_count; file++) {                                          // for each csv file
-        esp_task_wdt_reset();                                                               // reset the watchdog timer
-        DataFile = SD.open("/" + csv_file_names[file] + ".csv", FILE_READ);
-        console.print(millis(), DEC); console.println("\tCreate Month File - Skipping Column Heading Row");
-        while (DataFile.available()) {                                                      // throw the first row, column headers, away
-            datatemp = DataFile.read();
-            if (datatemp == '\n') break;
+        Create_or_Open_New_Month_File();                                                    // open the month file for writing
+        esp_task_wdt_reset();                                                               // reset the watchdog timer incase task is too slow
+        String DataFileName = csv_file_names[file] + ".csv";
+        DataFile = SD.open("/" + DataFileName, FILE_READ);                 // open the data file
+        console.print(millis(), DEC); console.println("\tProcessing " + DataFileName);
+        Month_Data_Record_Start_Time = millis();
+        First_Month_Data_Record_Start_Time = Month_Data_Record_Start_Time;
+        console.print(millis(), DEC); console.print("\t");
+        while (DataFile.available()) {                                                      // throw the first row of each file away (column headers)
+            datatemp = DataFile.read();                                                     // read a character from the DataFile
+            if (datatemp == '\n') break;                                                    // finish when end of row detected
         }
-        console.print(millis(), DEC); console.println("\tReading Data Records");
         while (DataFile.available()) {                                                      // do while there are data available
-            datatemp = DataFile.read();                                                     // open the SD file
-            console.print(millis(), DEC); console.print("\tProcessing " + csv_file_names[file] + ".csv");
+            datatemp = DataFile.read();                                                     // read a character from the DataFile
+            esp_task_wdt_reset();                                                           // reset the watchdog timer incase task is too slow
             if (!DataFile) {                                                                // oops - file not available!
-                console.print(millis(), DEC); console.print("Error re-opening DataFile:" + String(DataFileName));
+                console.print(millis(), DEC); console.println("\tError re-opening DataFile:" + String(DataFileName));
                 Check_Red_Switch();                                                         // Reset will restart the processor so no return
             }
             else {
-                if (DataFile) {
-                    Field[character_count++] = datatemp;                                    // add it to the csvfield string
-                    if (datatemp == ',' || datatemp == '\n') {                                  // look for end of field
-                        Field[character_count - 1] = '\0';                                      // insert termination character where the ',' or '\n' was
+                if (DataFile) {                                                             // if there are data to process
+                    Field[character_count++] = datatemp;                                    // add the read character to the csvfield string
+                    if (datatemp == ',' || datatemp == '\n' || datatemp == '0x0d') {                              // look for end of field, comma or end of row
+                        Field[character_count - 1] = '\0';                                  // make Field a String
                         switch (datafieldNo) {
                         case 0: {
                             strncpy(Month_Data_Record.field.ldate, Field, sizeof(Month_Data_Record.field.ldate));       // Date
@@ -820,11 +890,11 @@ void Month_End_Process() {
                             break;
                         }
                         case 18: {
-                            Month_Data_Record.field.gas_volume = atof(Field);                                           // Gas Volume
-                            if (Month_Data_Record.field.gas_volume == 0) {                  // if it is zero (first record of each data file
-                                Month_Data_Record.field.gas_volume += Previous_Gas_Volume;          // make the gas volume monthly cumulative
+                            Month_Data_Record.field.gas_volume = atof(Field);                       // Gas Volume
+                            if (Month_Data_Record.field.gas_volume == 0) {                          // if it is zero (first record of each data file
+                                Month_Data_Record.field.gas_volume += Cumulative_Gas_Volume;        // make the gas volume monthly cumulative
                             }
-                            Previous_Gas_Volume = Month_Data_Record.field.gas_volume;               // save the new cumulative volume
+                            Cumulative_Gas_Volume = Month_Data_Record.field.gas_volume;             // save the new cumulative volume
 #ifdef PRINT_MONTH_DATA_VALUES
                             message = "\tMonth Data: Gas Volume: ";
                             message += String(Month_Data_Record.field.gas_volume);
@@ -833,7 +903,8 @@ void Month_End_Process() {
                             break;
                         }
                         case 19: {
-                            strncpy(Month_Data_Record.field.weather_description, Field, sizeof(Month_Data_Record.field.weather_description));
+                            //              strncpy(Month_Data_Record.field.weather_description, Field, sizeof(Month_Data_Record.field.weather_description));
+                            strncpy(Month_Data_Record.field.weather_description, Field, character_count);
 #ifdef PRINT_MONTH_DATA_VALUES
                             message = "\tMonth Data: Weather Description: ";
                             message += String(Month_Data_Record.field.weather_description);
@@ -871,16 +942,52 @@ void Month_End_Process() {
                         MonthFile.print(Month_Data_Record.field.wind_direction); MonthFile.print(",");          // [17] Wind Direction
                         MonthFile.print(Month_Data_Record.field.gas_volume); MonthFile.print(",");              // [18] Gas Volume
                         MonthFile.print(Month_Data_Record.field.weather_description);                           // [19] Weather Description
-                        MonthFile.println();                                                                    // end of record
+                        //                       MonthFile.println();                                                                    // end of record
+                        Month_Data_Record_Count++;                                         // increment the running record toral
+                        console.print(".");
+                        if ((Month_Data_Record_Count % 400) == 0) {
+                            esp_task_wdt_reset();
+                            record_time = ((double)millis() - (double)Month_Data_Record_Start_Time) / (double)1000;
+                            console.print(" (");
+                            console.print(Month_Data_Record_Count);
+                            console.print(") [");
+                            console.print(record_time, 4);
+                            console.println("s]");
+                            console.print(millis(), DEC);                                   // start another line
+                            console.print("\t");
+                            Month_Data_Record_Start_Time = millis();
+                        }
                     } // end of end of line detected
                 } // end of while
             }
-            DataFile.close();
-            DataFile.flush();
         }
+        console.print(" ("); console.print(Month_Data_Record_Count);
+        console.print(") [");
+        if (Month_Data_Record_Count > 0) {
+            record_time = ((double)millis() - (double)First_Month_Data_Record_Start_Time) / (double)Month_Data_Record_Count;
+            record_time = record_time / (double)1000;
+            console.print(record_time, 6);
+        }
+        else {
+            console.print(First_Month_Data_Record_Start_Time - millis());
+        }
+        console.println("s]");
+
+        DataFile.close();                                                                   // close the DataFile 
+        DataFile.flush();
+        MonthFile.close();                                                                  // close the MonthFile to preserve file
+        MonthFile.flush();
     }
-    MonthFile.close();
-    MonthFile.flush();
+    Delete_Files(file_count);                                                               // once all files amalgameted, delete the files
+}
+void Delete_Files(int file_count) {
+    console.print(millis(), DEC); console.println("\tDelete Data Files");
+    for (i = 1; i < file_count; i++) {
+        //        SD.remove(csv_file_names[i]);
+        console.print(millis(), DEC); console.println("\t" + csv_file_names[i] + " Removed");
+    }
+    console.print(millis(), DEC); console.println("\tFile Deletion Completed");
+
 }
 void Write_New_Data_Record_to_Data_File() {
     digitalWrite(Blue_led_pin, HIGH);                          // turn the SD activity LED on
@@ -967,11 +1074,11 @@ void Create_New_Data_File() {
             }
         }
         console.print(millis(), DEC); console.println("\tDay Data File " + DataFileName + " Opened");
-        for (int x = 0; x < Number_of_Column_Field_Names; x++) {           // write data column headings into the SD file
+        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {           // write data column headings into the SD file
             DataFile.print(Column_Field_Names[x]);
             DataFile.print(",");
         }
-        DataFile.println(Column_Field_Names[Number_of_Column_Field_Names]);
+        DataFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
         console.print(millis(), DEC); console.println("\tColumn Headings written to Day Data File");
         DataFile.close();
         DataFile.flush();
@@ -1042,17 +1149,19 @@ void Prefill_Data_Array() {
     char datatemp;
     int prefill_Data_Table_Pointer = 0;
     String message;
+    double record_time = 0;
     Data_Table_Pointer = 0;
     SD_Led_Flash_Start_Stop(true);                                              // start the sd led flashing
     console.print(millis(), DEC); console.println("\tLoading DataFile from " + String(DataFileName));
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
+    Data_Record_Start_Time = millis();
+    First_Data_Record_Start_Time = Data_Record_Start_Time;
+    console.print(millis(), DEC); console.print("\t");
     if (DataFile) {
-        console.print(millis(), DEC); console.println("\tPrefill Array - Skipping Column Heading Row");
         while (DataFile.available()) {                                           // throw the first row, column headers, away
             datatemp = DataFile.read();
             if (datatemp == '\n') break;
         }
-        console.print(millis(), DEC); console.println("\tPrefill Array - Reading Data Records");
         while (DataFile.available()) {                                           // do while there are data available
             Flash_SD_LED();                                                     // flash the sd led
             datatemp = DataFile.read();
@@ -1294,22 +1403,20 @@ void Prefill_Data_Array() {
             }
             if (datatemp == '\n') {                     // at this point the obtained record has been saved in the table
                 Update_Webpage_Variables_from_Table(prefill_Data_Table_Pointer);    // update the web variables with the record just saved
-                if (prefill_Data_Table_Pointer == 0) {
-                    console.print(millis(), DEC); console.print("\t");
-                    Data_Record_Start_Time = micros();         // initialise start time for read timing
-                    First_Data_Record_Start_Time = Data_Record_Start_Time;
-                }
                 prefill_Data_Table_Pointer++;                                       // increment the table array pointer
                 Data_Record_Count++;                                         // increment the running record toral
                 console.print(".");
                 if ((Data_Record_Count % 400) == 0) {
+                    esp_task_wdt_reset();
+                    record_time = ((double)millis() - (double)Data_Record_Start_Time) / (double)1000;
                     console.print(" (");
                     console.print(Data_Record_Count);
                     console.print(") [");
-                    console.print(((Data_Record_Start_Time - millis()) / Data_Record_Count) / 1000);
+                    console.print(record_time, 4);
                     console.println("s]");
                     console.print(millis(), DEC);                                   // start another line
                     console.print("\t");
+                    Data_Record_Start_Time = millis();
                 }
                 if (prefill_Data_Table_Pointer == Data_Table_Size) {                 // if pointer is greater than table size
                     Shuffle_Data_Table();
@@ -1322,8 +1429,10 @@ void Prefill_Data_Array() {
     DataFile.close();
     console.print(" ("); console.print(Data_Record_Count);
     console.print(") [");
+    record_time = (((double)millis() - (double)First_Data_Record_Start_Time) / (double)Data_Record_Count) / (double)1000;
+    console.print("[");
     if (Data_Record_Count > 0) {
-        console.print(((millis() - First_Data_Record_Start_Time) / Data_Record_Count) / 1000);
+        console.print(record_time, 4);
     }
     else {
         console.print(millis() - First_Data_Record_Start_Time);
@@ -1444,7 +1553,7 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     Latest_Gas_Date_With = Readings_Table[Data_Table_Pointer].field.ldate;
     Latest_Gas_Time_With = Readings_Table[Data_Table_Pointer].field.ltime;
 }
-void Display() {
+void I_Display() {
     double maximum_Amperage = 0;
     console.print(millis(), DEC); console.println("\tWeb Display of Graph Requested via Webpage");
     webpage = "";
@@ -1522,7 +1631,7 @@ void Display() {
     Page_Footer();
     lastcall = "display";
 }
-void Web_Reset() {
+void I_Web_Reset() {
     console.print(millis(), DEC); console.println("\tWeb Reset of Processor Requested via Webpage");
     ESP.restart();
 }
@@ -1613,7 +1722,7 @@ void Page_Footer() {
     server.send(200, "text/html", webpage);
     webpage = "";
 }
-void Information() {                                                 // Display file size of the datalog file
+void I_Information() {                                                 // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
     console.print(millis(), DEC); console.println("\tWeb Display of Information Requested via Webpage");
     String ht = String(Date_of_Highest_Voltage + " at " + Time_of_Highest_Voltage + " as " + String(Highest_Voltage) + " volts");
@@ -1766,20 +1875,32 @@ void Information() {                                                 // Display 
     DataFile.close();
     Page_Footer();
 }
-void Download_Files() {
+void I_Download_Files() {
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
     console.print(millis(), DEC); console.println("\tDownload of Files Requested via Webpage");
+    esp_task_wdt_init(3000, false);                                            // increase the watchdog timer in case long file
     Page_Header(false, "Energy Monitor Download Files");
-    for (i = 1; i < file_count; i++) {
-        webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-        webpage += "&nbsp;<a href=\"/GetFile?file=" + String(FileNames[i]) + " " + "\">Download</a>";
-        webpage += "</h3>";
+    if (file_count > 0) {
+        for (i = 0; i < file_count; i++) {
+            webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(FileNames[i]) + " ";
+            webpage += "&nbsp;<a href=\"/GetFile?file=" + String(FileNames[i]) + " " + "\">Download</a>";
+            webpage += "</h3>";
+        }
+    }
+    else {
+        webpage += F("<h3 ");
+        webpage += F("style='text-align:left;'><strong><span style='color:DodgerBlue;bold:true;font-size:24px;'");
+        webpage += F(">No Downloadable Files");
+        webpage += F("</span></strong></h3>");
     }
     Page_Footer();
+    esp_task_wdt_init(WDT_TIMEOUT, true);                       // re enable the watchdog
+    esp_task_wdt_add(NULL);
 }
-void Download_File() {                                                          // download the selected file
+void I_Download_File() {                                                          // download the selected file
     String fileName = server.arg("file");
     console.print(millis(), DEC); console.println("\tDownload of File " + fileName + " Requested via Webpage");
+    esp_task_wdt_init(3000, false);                                                          // disable the watchdog incase long file
     File DataFile = SD.open("/" + fileName, FILE_READ);    // Now read data from FS
     if (DataFile) {                                             // if there is a file
         if (DataFile.available()) {                             // If data is available and present
@@ -1792,18 +1913,18 @@ void Download_File() {                                                          
     }
     DataFile.close(); // close the file:
     webpage = "";
+    esp_task_wdt_init(WDT_TIMEOUT, true);                       // re enable the watchdog
+    esp_task_wdt_add(NULL);
 }
-void Delete_Files() {                                                           // allow the cliet to select a file for deleti
+void I_Delete_Files() {                                                           // allow the cliet to select a file for deleti
     int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
     console.print(millis(), DEC); console.println("\tDelete Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Delete Files");
-    if (file_count > 3) {
-        for (i = 1; i < file_count; i++) {
-            if (FileNames[i] != DataFileName) {   // do not list the current file
-                webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
-                webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
-                webpage += "</h3>";
-            }
+    if (file_count > 0) {
+        for (i = 0; i < file_count; i++) {
+            webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(FileNames[i]) + " ";
+            webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
+            webpage += "</h3>";
         }
     }
     else {
@@ -1814,18 +1935,18 @@ void Delete_Files() {                                                           
     }
     Page_Footer();
 }
-void Del_File() {                                                       // web request to delete a file
+void I_Del_File() {                                                       // web request to delete a file
     String fileName = "\20221111.csv";                                  // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
     if (fileName != ("/" + DataFileName)) {                            // do not delete the current file
         SD.remove(fileName);
         console.print(millis(), DEC); console.println("\t" + String(DataFileName) + " Removed");
     }
-    int file_count = Count_Files_on_SD_Drive();                         // this counts and creates an array of file names on SD
     webpage = "";                                                       // don't delete this command, it ensures the server works reliably!
+    int file_count = Count_Files_on_SD_Drive();                                 // this counts and creates an array of file names on SD
     Page_Header(false, "Energy Monitor Delete Files");
-    if (file_count > 3) {
-        for (i = 1; i < file_count; i++) {
+    if (file_count > 0) {
+        for (i = 0; i < file_count; i++) {
             if (FileNames[i] != DataFileName) {   // do not list the current file
                 webpage += "<h3 style=\"text-align:left;color:DodgerBlue;font-size:18px\";>" + String(i) + " " + String(FileNames[i]) + " ";
                 webpage += "&nbsp;<a href=\"/DelFile?file=" + String(FileNames[i]) + " " + "\">Delete</a>";
@@ -1853,10 +1974,11 @@ int Count_Files_on_SD_Drive() {
             files_present = true;
             File DataFile = SD.open("/" + filename, FILE_READ);     // Now read data from FS
             if (DataFile) {                                         // if there is a file
-                FileNames[file_count] = filename;
-                //                console_message = "File " + String(file_count) + " filename " + String(filename);
-                //                console.print(millis(), DEC); console.print(console_message);
-                file_count++;                                       // increment the file count
+                if ((filename.indexOf(".csv") > 0) || (filename.indexOf(".csm") > 0)) {
+                    FileNames[file_count] = filename;
+                    // console.print(millis(), DEC); console.println("\tFile " + String(file_count) + " " + String(filename));
+                    file_count++;                                       // increment the file count
+                }
             }
             DataFile.close(); // close the file:
             webpage = "";
@@ -1868,7 +1990,7 @@ int Count_Files_on_SD_Drive() {
     } while (files_present);
     return (file_count);
 }
-void Wipe_Files() {                            // selected by pressing combonation of buttons
+void I_Wipe_Files() {                            // selected by pressing combonation of buttons
     console.print(millis(), DEC); console.print("Start of Wipe Files Request by Switch");
     String filename;
     File root = SD.open("/");                                       //  Open the root directory
@@ -2048,6 +2170,7 @@ void Receive(int field) {
         }
     }
 }
+/*
 void Check_Green_Switch() {
     Green_Switch.update();
     if (Green_Switch.fell()) {
@@ -2059,11 +2182,13 @@ void Check_Green_Switch() {
         Green_Switch_Pressed = false;
     }
 }
+*/
 void Check_Blue_Switch() {
     Blue_Switch.update();
     if (Blue_Switch.fell()) {
         console.print(millis(), DEC); console.println("\tBlue Button Pressed");
         Blue_Switch_Pressed = true;
+        Month_End_Process();
     }
     if (Blue_Switch.rose()) {
         console.print(millis(), DEC); console.println("\tBlue Button Released");
@@ -2096,6 +2221,7 @@ void Check_Yellow_Switch() {
     if (Yellow_Switch.fell()) {
         console.print(millis(), DEC); console.print("Yellow Button Pressed");
         Yellow_Switch_Pressed = true;
+        Month_End_Process();
     }
     if (Yellow_Switch.rose()) {
         console.print(millis(), DEC); console.print("Yellow Button Released");
