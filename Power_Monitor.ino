@@ -30,6 +30,7 @@ Change Record
 11/07/2023  12.1 Month end routines
 14/07/2023  12.2 Deletes old files at end of the Month End Routine
 18/07/2023  12.3 If Highest and Lowest Voltage are 0 set them to the first read voltage
+18/07/2023  12.4 Now sorts the files into date order for Download and Delete
 */
 // Compiler Directives ------
 //#define PRiNT_PREFiLL_RECORDS
@@ -2006,6 +2007,7 @@ void i_information() {                                                    // Dis
 }
 void i_Download_Files() {
     int file_count = Count_Files_on_SD_Drive();             // this counts and creates an array of file names on SD
+    sortArray(FileNames, file_count);         // sort into rising order
     if (Print_Monitor_Messages) {
         console.print(millis(), DEC); console.println("\tDownload of Files Requested via Webpage");
     }
@@ -2054,6 +2056,7 @@ void i_Download_File() {                                                        
 void i_Delete_Files() {                                            // allow the cliet to select a file for deleting
     int file_count = 0;
     file_count = Count_Files_on_SD_Drive();                 // this counts and creates an array of file names on SD
+    sortArray(FileNames, file_count);         // sort into rising order
     if (Print_Monitor_Messages) {
         console.print(millis(), DEC); console.println("\tDelete Files Requested via Webpage");
     }
