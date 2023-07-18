@@ -29,6 +29,7 @@ Change Record
 07/07/2023  12.0 Removed console file and tidy up
 11/07/2023  12.1 Month end routines
 14/07/2023  12.2 Deletes old files at end of the Month End Routine
+18/07/2023  12.3 If Highest and Lowest Voltage are 0 set them to the first read voltage
 */
 // Compiler Directives ------
 //#define PRiNT_PREFiLL_RECORDS
@@ -763,7 +764,7 @@ void Month_End_Process() {
                     console.print(millis(), DEC); console.println("\t" + message);
 #endif            
                     break;
-                }
+                    }
                 case 1: {
                     for (int x = 0; x < 9; x++) {
                         Concatenation_Data_Record.field.ltime[x] = month_field[x];
@@ -774,7 +775,7 @@ void Month_End_Process() {
                     console.print(millis(), DEC); console.println("\t" + message);
 #endif            
                     break;
-                }
+                    }
                 case 2: {
                     Concatenation_Data_Record.field.Voltage = atof(month_field);                         // Voltage
 #ifdef PRiNT_MONTH_DATA_VALUES
@@ -942,7 +943,7 @@ void Month_End_Process() {
                     console.print(millis(), DEC); console.println("\t" + message);
 #endif            
                     break;
-                }
+                    }
                 default: {
                     break;
                 }
@@ -950,7 +951,7 @@ void Month_End_Process() {
                 month_data_field_number++;
                 month_field[0] = '\0';
                 month_character_count = 0;
-            } // assembling the fields - end of if line end  
+                } // assembling the fields - end of if line end  
             if (month_datatemp == '\n') {// if the character /n (end of line) save fields to the Concatenation File
                 month_data_field_number = 0;
                 ConcatenationFile.print(Concatenation_Data_Record.field.ldate);
@@ -1013,7 +1014,7 @@ void Month_End_Process() {
                     server.handleClient();                                  // handle any messages from the website
                 }
             } // end of end of line detected
-        }// end of while
+                }// end of while
         console.print(" ("); console.print(Concatenation_Data_Record_Count);
         console.print(") [");
         if (Concatenation_Data_Record_Count > 0) {
@@ -1030,7 +1031,7 @@ void Month_End_Process() {
         SourceDataFile.flush();
         ConcatenationFile.close();                                  // close the ConcatenationFile to preserve file
         ConcatenationFile.flush();
-    }
+                }
     console.print(millis(), DEC); console.println("\tStage 5. Delete Data Files");
     ConcatenationFile = SD.open("/" + ConcatenationFileName, FILE_APPEND);        // open the month file for append
     if (!ConcatenationFile) {                                                                // log file not opened
@@ -1049,7 +1050,7 @@ void Month_End_Process() {
     console.print(millis(), DEC); console.println("\tFile Deletion Completed");
     console.print(millis(), DEC); console.println("\tMonth End Process Complete");
     Print_Monitor_Messages = true;
-}
+            }
 void Write_New_Data_Record_to_Data_File() {
     digitalWrite(Blue_led_pin, HIGH);                                                // turn the SD activity LED on
     DataFile = SD.open("/" + DataFileName, FILE_APPEND);                                        // open the SD file
@@ -1556,9 +1557,10 @@ void Shuffle_Data_Table() {
         Readings_Table[i].field.wind_direction = Readings_Table[i + 1].field.wind_direction;            // wdir
         Readings_Table[i].field.gas_volume = Readings_Table[i + 1].field.gas_volume;                    // gas v
         strncpy(Readings_Table[i].field.weather_description, Readings_Table[i + 1].field.weather_description, sizeof(Readings_Table[i].field.weather_description));// [19] weather description
+        }
     }
-}
 void Update_Webpage_Variables_from_Current_Data_Record() {
+    if (!Highest_Voltage) Highest_Voltage = Current_Data_Record.field.Voltage;
     if (Current_Data_Record.field.Voltage >= Highest_Voltage) {
         Date_of_Highest_Voltage = Current_Data_Record.field.ldate;
         Time_of_Highest_Voltage = Current_Data_Record.field.ltime;
@@ -1570,6 +1572,7 @@ void Update_Webpage_Variables_from_Current_Data_Record() {
             Time_of_Highest_Voltage = Current_Data_Record.field.ltime;
         }
     }
+    if (!Lowest_Voltage) Lowest_Voltage = Current_Data_Record.field.Voltage;
     if (Lowest_Voltage >= Current_Data_Record.field.Voltage) {
         Date_of_Lowest_Voltage = Current_Data_Record.field.ldate;
         Time_of_Lowest_Voltage = Current_Data_Record.field.ltime;
