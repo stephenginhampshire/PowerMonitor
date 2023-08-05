@@ -34,9 +34,10 @@ Change Record
 02/08/2023  12.5 Added Over the Air (OTA) technology
 03/08/2023  12.6 OTA Fully Debugged
 05/08/2023  12.7 WhatsApp used to notify start/end of Month End Process
+05/08/2023  12.8 WhatsApp Message sent if "wait for user" error flagged.
 */
 
-String version = "V12.7";
+String version = "V12.8";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -354,7 +355,7 @@ weather_record_type Weather_Record;
 unsigned long Last_Cycle = 0;
 unsigned long Last_Weather_Read = 0;
 uint64_t SD_freespace = 0;
-uint64_t Critical_SD_Freespace = 0;
+constexpr double Critical_SD_Freespace = 1;                     // bottom limit of SD space in MB
 double SD_freespace_double = 0;
 String Temp_Message;
 bool Setup_Complete = false;
@@ -530,6 +531,7 @@ void setup() {
             else if (upload.status == UPLOAD_FILE_END) {
                 if (Update.end(true)) {
                     console_print("Update Success: Rebooting");
+                    i_Display();
                 }
                 else {
                     Update.printError(Serial);
@@ -546,7 +548,7 @@ void setup() {
     if (!SD.begin(SS_pin)) {
         console_print("SD Drive Begin Failed");
         while (true) {
-            Check_Red_Switch();
+            Check_Red_Switch("SD Drive Begin Failed");
         }
     }
     else {
@@ -555,9 +557,7 @@ void setup() {
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
             console_print("No SD Card Found");
-            while (true) {
-                Check_Red_Switch();
-            }
+            Check_Red_Switch("No SD Card Found");
         }
         String card;
         if (cardType == CARD_MMC) {
@@ -574,7 +574,6 @@ void setup() {
         }
         console_print("SD Card Type: " + card);
         uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-        Critical_SD_Freespace = cardSize * (uint64_t).9;
         console_print("SD Card Size : " + String(cardSize) + "MBytes");
         console_print("SD Total Bytes : " + String(SD.totalBytes()));
         console_print("SD Used bytes : " + String(SD.usedBytes()));
@@ -630,6 +629,7 @@ void loop() {
     if (millis() > Last_Cycle + (unsigned long)5000) {          // send requests every 5 seconds (5000 millisecods)
         Get_Sensor_Data();
     }
+    Check_SD_Space();
 }
 //------------
 void Get_Sensor_Data() {
@@ -701,12 +701,11 @@ void Month_End_Process() {
     int month_data_field_number = 0;
     int file_count = 0;
     int csv_count = 0;
-    //   double record_time = 0;
     Print_Monitor_Messages = false;
     String file_month = "00";
     String this_file_month = "00";
     console_print("Commencing Month End Process");
-    Send_WhatsApp_Message("Month End Process Commenced");
+    Send_WhatsApp_Message("Power Monitor - Month End Process Commenced");
     ConcatenationFileName = "MF";                                               // "MF" - create the month file name
     ConcatenationFileName += String(Previous_Date_Time_Data.field.Year);       // "MF1951"
     if (Previous_Date_Time_Data.field.Month < 10) {
@@ -725,7 +724,7 @@ void Month_End_Process() {
     ConcatenationFile = SD.open("/" + ConcatenationFileName, FILE_WRITE);
     if (!ConcatenationFile) {                    // log file not opened
         console_print("Error opening Concatenation file (" + String(ConcatenationFileName) + ")");
-        Check_Red_Switch();                                    // loop waiting for red switch to restart processor
+        Check_Red_Switch("Power Monitor - Error opening Concatenation file");
     }
     console_print("\t\tConcatenation File " + ConcatenationFileName + " created");
     console_print("\t\tWriting column headings into Concatenation File");
@@ -756,8 +755,7 @@ void Month_End_Process() {
     if (!csv_count) {
         console_print("\t\tNo relevant files");
         console_print("Month End Process Terminated");
-        Send_WhatsApp_Message("Month End Process Terminated - No relevant files to concatenate");
-        Send_WhatsApp_Message(ConcatenationFileName + " Removed");
+        Send_WhatsApp_Message("Power Monitor - Month End Process Terminated - No relevant files to concatenate, " + ConcatenationFileName + " Removed");
         SD.remove("/" + ConcatenationFileName);
         console_print("\t\t" + ConcatenationFileName + " Removed");
         Print_Monitor_Messages = true;
@@ -776,14 +774,14 @@ void Month_End_Process() {
         ConcatenationFile = SD.open("/" + ConcatenationFileName, FILE_APPEND);    // open the month file for append
         if (!ConcatenationFile) {                                                 // log file not opened
             console_print("Error opening Concateation file (" + String(ConcatenationFileName) + ")");
-            Check_Red_Switch();
+            Check_Red_Switch("Power Monitor - Error opening Concatenation File");
         }
         Concatenation_Data_Record_Count = 0;
         SourceFileName = Csv_File_Names[file] + ".csv";
         SourceDataFile = SD.open("/" + SourceFileName, FILE_READ);                            // open the data file
         if (!SourceDataFile) {                                                               // log file not opened
             console_print("Error opening Source file (" + String(SourceFileName) + ")");
-            Check_Red_Switch();
+            Check_Red_Switch("Power Monitor - Error opening Source File");
         }
         console_print("\t\tProcessing " + SourceFileName);
         Flash_SD_LED();
@@ -809,7 +807,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                }
+                    }
                 case 1: {
                     for (int x = 0; x < 9; x++) {
                         Concatenation_Data_Record.field.ltime[x] = month_field[x];
@@ -820,7 +818,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                }
+                    }
                 case 2: {
                     Concatenation_Data_Record.field.Voltage = atof(month_field);                         // Voltage
 #ifdef PRiNT_MONTH_DATA_VALUES
@@ -988,7 +986,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                }
+                    }
                 default: {
                     break;
                 }
@@ -996,7 +994,7 @@ void Month_End_Process() {
                 month_data_field_number++;
                 month_field[0] = '\0';
                 month_character_count = 0;
-            } // assembling the fields - end of if line end  
+                } // assembling the fields - end of if line end  
             if (month_datatemp == '\n') {// if the character /n (end of line) save fields to the Concatenation File
                 month_data_field_number = 0;
                 ConcatenationFile.print(Concatenation_Data_Record.field.ldate);
@@ -1045,13 +1043,13 @@ void Month_End_Process() {
                     server.handleClient();                                  // handle any messages from the website
                 }
             } // end of end of line detected
-        }// end of while
+                }// end of while
         console_print("\t\t" + SourceFileName + " Processing Complete");
         SourceDataFile.close();                                                               // close the DataFile 
         SourceDataFile.flush();
         ConcatenationFile.close();                                  // close the ConcatenationFile to preserve file
         ConcatenationFile.flush();
-    }
+                }
     console_print("\tStage 5. Delete Data Files");
     String fileName = "/99999999.csv";
     for (int i = 0; i < csv_count; i++) {
@@ -1061,9 +1059,9 @@ void Month_End_Process() {
     }
     console_print("\tFile Deletion Completed");
     console_print("Month End Process Complete");
-    Send_WhatsApp_Message("Month End Process Complete, " + ConcatenationFileName + " Now available for download");
+    Send_WhatsApp_Message("Power Monitor - Month End Process Complete, " + ConcatenationFileName + " Now available for download");
     Print_Monitor_Messages = true;                                  // re enable monitor messages
-}
+            }
 void Send_WhatsApp_Message(String message) {
     String WhatsApp_url = "https://api.callmebot.com/whatsapp.php?phone=447785938200&apikey=8876034&text=" + urlEncode(message);
     HTTPClient http;
@@ -1086,11 +1084,8 @@ void Write_New_Data_Record_to_Data_File() {
         if (Print_Monitor_Messages) {
             console_print("Error re-opening DataFile:" + String(DataFileName));
         }
-        while (true) {
-            Check_Red_Switch();                                   // Reset will restart the processor so no return
-        }
+        Check_Red_Switch("Power Monitor - Error re-opening DataFile: " + String(DataFileName));
     }
-    SD_freespace = (SD.totalBytes() - SD.usedBytes());
     if (Print_Monitor_Messages) {
         console_print("New Data Record Written to " + DataFileName);
     }
@@ -1147,14 +1142,24 @@ void Write_New_Data_Record_to_Data_File() {
     Latest_weather_description = Current_Data_Record.field.weather_description;
     if (Current_Data_Record.field.gas_volume != Latest_Gas_Volume || Latest_Gas_Volume == 0) {
         Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
-        Latest_Gas_Date_With = Current_Data_Record.field.ldate;
-        Latest_Gas_Time_With = Current_Data_Record.field.ltime;
+        if (Latest_Gas_Volume != 0) {
+            Latest_Gas_Date_With = Current_Data_Record.field.ldate;
+            Latest_Gas_Time_With = Current_Data_Record.field.ltime;
+        }
+        else {
+            Latest_Gas_Date_With = "";
+            Latest_Gas_Time_With = "";
+        }
     }
+}
+void Check_SD_Space() {
+    SD_freespace = (SD.totalBytes() - SD.usedBytes());
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < Critical_SD_Freespace) {
         if (Print_Monitor_Messages) {
-            console_print("WARNiNG - SD Free Space critical " + String(SD_freespace) + "MBytes");
+            console_print("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
         }
+        Send_WhatsApp_Message("Power Monitor - SD Space Critical " + String(SD.usedBytes() / 1000000) + " MBytes used");
     }
 }
 void Add_New_Data_Record_to_Display_Table() {
@@ -1200,9 +1205,7 @@ void Create_or_Open_New_Data_File() {
             if (Print_Monitor_Messages) {
                 console_print("Error opening Data file in Create New Data File [" + String(DataFileName) + "]");
             }
-            while (true) {
-                Check_Red_Switch();
-            }
+            Check_Red_Switch("Power Monitor - Error opening Data file");
         }
         if (Print_Monitor_Messages) {
             console_print("Day Data File " + DataFileName + " Created");
@@ -1615,8 +1618,8 @@ void Shuffle_Data_Table() {
         Readings_Table[i].field.wind_direction = Readings_Table[i + 1].field.wind_direction;            // wdir
         Readings_Table[i].field.gas_volume = Readings_Table[i + 1].field.gas_volume;                    // gas v
         strncpy(Readings_Table[i].field.weather_description, Readings_Table[i + 1].field.weather_description, sizeof(Readings_Table[i].field.weather_description));// [19] weather description
+        }
     }
-}
 void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     if (Readings_Table[Data_Table_Pointer].field.Voltage >= Highest_Voltage || Highest_Voltage == 0) {
         Date_of_Highest_Voltage = String(Readings_Table[Data_Table_Pointer].field.ldate);
@@ -1819,14 +1822,14 @@ void i_Information() {                                                    // Dis
     // 1.Wifi Signal Strength --------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true;font-size:12px; '");
+    webpage += F("bold:true;font-size:14px; '");
     webpage += F(">WiFi Signal Strength = ");
     webpage += String(WiFi_Signal_Strength) + " Dbm";
     webpage += "</span></strong></p>";
     // 2.Data File Size -----
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Current Data file size = ");
     webpage += String(DataFile.size());
     webpage += F(" Bytes");
@@ -1835,7 +1838,7 @@ void i_Information() {                                                    // Dis
     if (SD_freespace < Critical_SD_Freespace) {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-        webpage += F("bold:true; font-size:12px; '");
+        webpage += F("bold:true; font-size:14px; '");
         webpage += F("'>SD Free Space = ");
         webpage += String(SD_freespace / 1000000);
         webpage += F(" MB");
@@ -1844,7 +1847,7 @@ void i_Information() {                                                    // Dis
     else {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-        webpage += F("bold:true; font-size:12px; '");
+        webpage += F("bold:true; font-size:14px; '");
         webpage += F("'>SD Free Space = ");
         webpage += String(SD_freespace / 1000000);
         webpage += F(" MB");
@@ -1853,14 +1856,14 @@ void i_Information() {                                                    // Dis
     // 4.File Count ---------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'> Number of Files on SD : ");
     webpage += String(file_count);
     webpage += "</span></strong></p>";
     // 5.Last Boot Time -----
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Date the System was Booted : ");
     webpage += Last_Boot_Date_With + " at " + Last_Boot_Time_With;
     webpage += "</span></strong></p>";
@@ -1868,7 +1871,7 @@ void i_Information() {                                                    // Dis
     double Percentage = (Data_Record_Count * (double)100) / (double)17280;
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Number of Data Readings: ");
     webpage += String(Data_Record_Count);
     webpage += F(" Percentage of Full Day: ");
@@ -1878,7 +1881,7 @@ void i_Information() {                                                    // Dis
     // 7.Highest Voltage ----
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Highest Voltage was recorded on ");
     webpage += ht;
     webpage += "</span></strong></p>";
@@ -1886,7 +1889,7 @@ void i_Information() {                                                    // Dis
     // 8.Lowest Voltage -----
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Lowest Voltage was recorded on ");
     webpage += lt;
     webpage += "</span></strong></p>";
@@ -1894,7 +1897,7 @@ void i_Information() {                                                    // Dis
     // 9.Highest Amperage ---
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Greatest Amperage was recorded on ");
     webpage += ha;
     webpage += "</span></strong></p>";
@@ -1902,7 +1905,7 @@ void i_Information() {                                                    // Dis
     // 10.Cumulative KiloWattHours ---------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font - size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Daily KiloWatt Hours: ");
     webpage += String(Cumulative_kwh, 3);
     webpage += "</span></strong></p>";
@@ -1910,7 +1913,7 @@ void i_Information() {                                                    // Dis
     // 11.Weather Latest Weather Temperature Feels Like, Maximum & Minimum --------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font - size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Temperature: ");
     webpage += String(Latest_weather_temperature, 2);
     webpage += F("&deg;C,");
@@ -1928,7 +1931,7 @@ void i_Information() {                                                    // Dis
     // 12.Weather Latest Weather Relative Humidity --------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font - size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Relative Humidity: ");
     webpage += String(Latest_relative_humidity) + "%";
     webpage += "</span></strong></p>";
@@ -1936,7 +1939,7 @@ void i_Information() {                                                    // Dis
     // 13.Weather Latest Atmospheric Pressure -------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Atmospheric Pressure: ");
     webpage += String(Latest_atmospheric_pressure) + " millibars";
     webpage += "</span></strong></p>";
@@ -1962,7 +1965,7 @@ void i_Information() {                                                    // Dis
     // 16.Last Gas Sensor Reading ----------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Date and Time of Last Gas Switch Signal: ");
     webpage += String(Latest_Gas_Date_With) + " at " + Latest_Gas_Time_With;
     webpage += "</span></strong></p>";
@@ -1970,7 +1973,7 @@ void i_Information() {                                                    // Dis
     // 17.Latest Gas Volume -
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">Cumulative Gas Volume: ");
     webpage += String(Current_Data_Record.field.gas_volume) + " cubic metres";
     webpage += "</span></strong></p>";
@@ -1978,14 +1981,14 @@ void i_Information() {                                                    // Dis
     // 18. ---
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">.");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // 19. ---
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:12px; '");
+    webpage += F("bold:true; font-size:14px; '");
     webpage += F(">.");
     webpage += "</span></strong></p>";
     webpage += F("<p ");
@@ -2172,7 +2175,7 @@ void Receive(int field) {
             if (millis() > start_time + (unsigned long)500) {         // no data received within 500 ms so timeout
                 if (Print_Monitor_Messages) {
                     console_print("No Reply from RS485 within 500 ms");
-                    Check_Red_Switch();                           // Reset will restart the processor so no return
+                    Check_Red_Switch("Power Monitor - No Reply from RS485 within 500ms");                           // Reset will restart the processor so no return
                 }
             }
         }
@@ -2338,7 +2341,8 @@ void Check_Gas_Switch() {
 
     }
 }
-void Check_Red_Switch() {
+void Check_Red_Switch(String message) {
+    Send_WhatsApp_Message("Power Monitor - Fatal Error Detected - " + message);
     while (1) {
         digitalWrite(Green_led_pin, !digitalRead(Green_led_pin));
         digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));
@@ -2415,12 +2419,12 @@ void Update_Current_Timeinfo() {
             console_print("Attempting to Get Date " + String(connection_attempts));
         }
         delay(500);
-        Check_Red_Switch();
         connection_attempts++;
         if (connection_attempts > 20) {
             if (Print_Monitor_Messages) {
                 console_print("Time Network Error, Restarting");
             }
+            Send_WhatsApp_Message("Power Monitor - Time Network Error, Restarting");
             ESP.restart();
         }
     }
