@@ -36,9 +36,10 @@ Change Record
 05/08/2023  12.7 WhatsApp used to notify start/end of Month End Process
 05/08/2023  12.8 WhatsApp Message sent if "wait for user" error flagged
 05/08/2023  12.9 Firmware Update Login page now shows Power Monitor title
+16/08/2023  12.10   depreciated
+18/08/2023  12.11   Whats app message sent when new day file created
 */
-
-String version = "V12.9";
+String version = "V12.11";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -125,8 +126,10 @@ union Date_Time_Union {
 };
 //Date_Time_Union Today_Date_Time_Data;
 Date_Time_Union Last_Gas_Date_Time_Data;
-Date_Time_Union Today_Date_Time_Data;
-Date_Time_Union Previous_Date_Time_Data;
+Date_Time_Union New_Date_Time_Data;
+Date_Time_Union Current_Date_Time_Data;
+Date_Time_Union Month_End_Date_Time_Data;
+String Month_Names[] = { "","January","February","March","April","May","June","July","August","September","October","November","December" };
 String Current_Date_With = "1951/11/18";
 String Current_Date_Without = "19511118";
 String Current_Time_With = "00:00:00";
@@ -158,7 +161,6 @@ constexpr int Days_n_Month[13][2] = {
 // instantiations -----------
 struct tm timeinfo;
 Bounce Red_Switch = Bounce();
-//Bounce Green_Switch = Bounce();
 Bounce Blue_Switch = Bounce();
 Bounce Yellow_Switch = Bounce();
 Bounce Gas_Switch = Bounce();
@@ -221,31 +223,31 @@ union Data_Record_Union {
 };
 Data_Record_Union Current_Data_Record;
 Data_Record_Union Concatenation_Data_Record;
+// Data Table ---------------------------------------------------------------------------------------------------------
 int Data_Table_Pointer = 0;          // points to the next index of Data_Table
 int Data_Record_Count = 0;           // running total of records written to Data Table
-// Data Table Constants and Variables ------
 constexpr char Data_Table_Size = 60;
 struct Data_Table_Record {
-    char ldate[11];             //  [0 - 10]  date record was taken
-    char ltime[9];              //  [11 - 19]  time record was taken
-    double Voltage;             //  [20 - 23]
-    double Amperage;            //  [24 - 27]
-    double wattage;             //  [28 - 31]
-    double uptime;              //  [32 - 35]
-    double kilowatthour;        //  [36 - 39]
-    double powerfactor;         //  [40 - 43]
-    double frequency;           //  [44 - 47]
-    double sensor_temperature;  //  [48 - 51]
-    double weather_temperature; //  [52 - 54]
-    double temperature_feels_like;//  [55 - 58]
-    double temperature_maximum; //  [59 - 63]
-    double temperature_minimum; //  [64 - 67]
-    double atmospheric_pressure;//  [68 - 71]
-    double relative_humidity;   //  [72 - 75]
-    double wind_speed;          //  [76 - 79]
-    double wind_direction;      //  [80 - 83]
-    char weather_description[20]; //  [84 - 103]
-    double gas_volume;          //  [104 - 107]
+    char ldate[11];                 //  [0 - 10]  date record was taken
+    char ltime[9];                  //  [11 - 19]  time record was taken
+    double Voltage;                 //  [20 - 23]
+    double Amperage;                //  [24 - 27]
+    double wattage;                 //  [28 - 31]
+    double uptime;                  //  [32 - 35]
+    double kilowatthour;            //  [36 - 39]
+    double powerfactor;             //  [40 - 43]
+    double frequency;               //  [44 - 47]
+    double sensor_temperature;      //  [48 - 51]
+    double weather_temperature;     //  [52 - 54]
+    double temperature_feels_like;  //  [55 - 58]
+    double temperature_maximum;     //  [59 - 63]
+    double temperature_minimum;     //  [64 - 67]
+    double atmospheric_pressure;    //  [68 - 71]
+    double relative_humidity;       //  [72 - 75]
+    double wind_speed;              //  [76 - 79]
+    double wind_direction;          //  [80 - 83]
+    char weather_description[20];   //  [84 - 103]
+    double gas_volume;              //  [104 - 107]
 }__attribute__((packed));
 constexpr int Data_Table_Record_Length = 108;
 union Data_Table_Union {
@@ -253,21 +255,12 @@ union Data_Table_Union {
     unsigned int characters[Data_Table_Record_Length];
 };
 Data_Table_Union Readings_Table[Data_Table_Size];
-unsigned long Data_Record_Start_Time = 0;
-unsigned long First_Data_Record_Start_Time = 0;
-unsigned long Concatenation_Data_Record_Start_Time = 0;
-unsigned long First_Concatenation_Data_Record_Start_Time = 0;
 /// ConcatenationFile Constants and Variables -------------
 File ConcatenationFile;
 String ConcatenationFileName = "M202301";       // .cvs
-String Console_Messages_while_not_Disk_Ready[100];
-int Console_Message_wndr_count = 0;
 int Concatenation_Data_Record_Count = 0;
 File SourceDataFile;
 String SourceFileName = "19511118.csv";
-// ConsoleFile Constants and Variables -----
-File ConsoleFile;
-String ConsoleFileName = "Console";
 // KWS Request Field Numbers 
 constexpr int Request_Voltage = 0;
 constexpr int Request_Amperage = 1;
@@ -290,7 +283,6 @@ constexpr byte RS485_Requests[Number_of_RS485_Requests + 1][8] = {
                         {0x02,0x03,0x00,0x1E,0x00,0x01,0xE4,0x3F},// [6]  Request Hertz, in tenths of a hertz
                         {0x02,0x03,0x00,0x1A,0x00,0x01,0xA5,0xFE},// [7]  Request temperature, in degrees centigrade
 };
-//char print_buffer[80];
 String FileNames[50];
 bool Yellow_Switch_Pressed = false;
 bool Green_Switch_Pressed = false;
@@ -360,24 +352,12 @@ constexpr double Critical_SD_Freespace = 1;                     // bottom limit 
 double SD_freespace_double = 0;
 String Temp_Message;
 bool Setup_Complete = false;
-bool Disk_Ready = false;
 char Complete_Weather_Api_Link[120];
-int Year = 0;
-int Month = 0;
 String Message;
-String Previous_Year = "0000";
-String Previous_Month = "00";
-String This_File_Name = "        ";
-// -----------
 char Parse_Output[25];
-bool New_Day_File_Required = true;
-bool Month_File_Required = true;
 String Csv_File_Names[31];                          // possibly 31 csv files
-unsigned long sd_off_time = 0;
-unsigned long sd_on_time = 0;
 int WiFi_Signal_Strength = 0;
 int WiFi_Retry_Counter = 0;
-bool Print_Monitor_Messages = true;
 // Debug / Test Variables ---
 bool Once = false;
 // --- Firware Update Pages
@@ -471,6 +451,7 @@ void setup() {
     pinMode(Yellow_Switch_pin, INPUT_PULLUP);
     pinMode(Green_led_pin, OUTPUT);
     pinMode(Gas_Switch_pin, INPUT_PULLUP);
+    console_print("Switch attachment commenced");
     Gas_Switch.attach(Gas_Switch_pin);
     Red_Switch.attach(Red_Switch_pin); // setup defaults for debouncing switches
     Blue_Switch.attach(Blue_Switch_pin);
@@ -481,7 +462,8 @@ void setup() {
     Gas_Switch.update();
     Red_Switch.update();
     Blue_Switch.update();
-    digitalWrite(0, HIGH);
+    console_print("Switch attachment complete");
+    //   digitalWrite(0, HIGH);
     digitalWrite(Green_led_pin, LOW);
     digitalWrite(Blue_led_pin, LOW);
     console_print("IO Configuration Complete");
@@ -489,19 +471,17 @@ void setup() {
     console_print("WiFi Configuration Commenced");
     StartWiFi(ssid, password);                  // Start WiFi
     initTime("GMT0BST, M3.5.0 / 1, M10.5.0");   // initialise the Time library to London
-    // --------------------------------------------------------------------------------------------------------------------
+    console_print("Starting Server");
+    server.begin();                             // Start Webserver
+    console_print("Server Started");
     server.on("/", i_Display);
     server.on("/Firmware", HTTP_GET, []() {
-        if (Print_Monitor_Messages) {
-            console_print("Firmware Upload Requested via Webpage");
-        }
+        console_print("Firmware Upload Requested via Webpage");
         server.sendHeader("Connection", "close");
         server.send(200, "text/html", loginIndex);
         });
     server.on("/serverIndex", HTTP_GET, []() {
-        if (Print_Monitor_Messages) {
-            console_print("Login Succeeded _ Firmware File Selection Requested via Webpage");
-        }
+        console_print("Login Succeeded _ Firmware File Selection Requested via Webpage");
         server.sendHeader("Connection", "close");
         server.send(200, "text/html", serverIndex);
         });
@@ -554,7 +534,6 @@ void setup() {
     }
     else {
         console_print("SD Drive Begin Succeeded");
-        Disk_Ready = true;
         uint8_t cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
             console_print("No SD Card Found");
@@ -584,8 +563,8 @@ void setup() {
     console_print("Date and Time Update");
     Update_Current_Timeinfo();                                              // update This date time info, no /s
     console_print("Setting Previous Date and Time to Today Date and Time");
-    Previous_Date_Time_Data.field.Day = Today_Date_Time_Data.field.Day;
-    Previous_Date_Time_Data.field.Month = Today_Date_Time_Data.field.Month;
+    Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;
+    Current_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month;
     Last_Boot_Time_With = Current_Time_With;
     Last_Boot_Date_With = Current_Date_With;
     This_Date_With = Current_Date_With;
@@ -625,7 +604,6 @@ void loop() {
     Check_Blue_Switch();
     Check_Gas_Switch();                                              // check if the gas switch sense pin has risen
     Check_NewDay();                                                                // check if the date has changed
-    Check_NewMonth();
     server.handleClient();                                                  // handle any messages from the website
     if (millis() > Last_Cycle + (unsigned long)5000) {          // send requests every 5 seconds (5000 millisecods)
         Get_Sensor_Data();
@@ -634,9 +612,7 @@ void loop() {
 }
 //------------
 void Get_Sensor_Data() {
-    if (Print_Monitor_Messages) {
-        console_print("Requesting Current Sensor and Weather information");
-    }
+    console_print("Requesting Current Sensor and Weather information");
     Last_Cycle = millis();                                             // update the last read milli second reading
     // weather information request start ---
     HTTPClient http;
@@ -648,9 +624,7 @@ void Get_Sensor_Data() {
             Parse_Weather_info(payload);
         }
         else {
-            if (Print_Monitor_Messages) {
-                console_print("Obtaining Weather information Failed, Return code: " + String(httpCode));
-            }
+            console_print("Obtaining Weather information Failed, Return code: " + String(httpCode));
         }
         http.end();
     }
@@ -668,32 +642,37 @@ void Get_Sensor_Data() {
     Add_New_Data_Record_to_Display_Table();                                  // add the record to the display table
 }// end of if millis >5000
 void Check_NewDay() {
-    Update_Current_Timeinfo();                                                          // update the Today_Date and Time
-    if (Today_Date_Time_Data.field.Day != Previous_Date_Time_Data.field.Day) {         // is the day different to yesterday
-        if (Previous_Date_Time_Data.field.Day >= 0) {                                  // they are different, but yesterday is zero
-            Previous_Date_Time_Data.field.Day = Today_Date_Time_Data.field.Day;        // so set yesterday month
+    Update_Current_Timeinfo();                                                      // update the Today_Date and Time
+    if ((New_Date_Time_Data.field.Day != Current_Date_Time_Data.field.Day)) {       // is the day different to previous day
+        if (Current_Date_Time_Data.field.Day < 1 || Current_Date_Time_Data.field.Day > 31) { // if the Previous Date not set, we have rebooted
+            console_print("Reopening Data File");
+            Create_or_Open_New_Data_File();                                         // open the day file, do not create a new one
+            Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date);
         }
         else {
-            console_print("New Day Detected");                                          // proven day change
-            Create_or_Open_New_Data_File();                                             // create a new Data File with new file name
-            Clear_Arrays();                                                                             // clear memory
-            Previous_Date_Time_Data.field.Day = Today_Date_Time_Data.field.Day;        // so set yesterday month
-            Send_WhatsApp_Message("Power Monitor - New Day Data File Started - " + Standard_Format_Date);
+            console_print("New Day Detected");                                      // proven day change
+            Create_or_Open_New_Data_File();                                         // create a new day file
+            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date);
+            Check_NewMonth();                                                       // if the date changed check if a new month started
         }
+        Clear_Arrays();                                                             // clear memory
+        Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;         // so set yesterday month
     }
 }
 void Check_NewMonth() {
-    Update_Current_Timeinfo();                                                              // update the Date and Time
-    if (Today_Date_Time_Data.field.Month != Previous_Date_Time_Data.field.Month) {          // month change
+    if (New_Date_Time_Data.field.Month != Current_Date_Time_Data.field.Month) {  // month change
         console_print("New Month Detected");
+        Month_End_Date_Time_Data.field.Day = Current_Date_Time_Data.field.Day;
+        Month_End_Date_Time_Data.field.Month = Current_Date_Time_Data.field.Month;
+        Month_End_Date_Time_Data.field.Year = Current_Date_Time_Data.field.Year;
         Month_End_Process();
-        Previous_Date_Time_Data.field.Month = Today_Date_Time_Data.field.Month;         // so set yesterday month
-        console_print("Prevous Month now set to " + Previous_Date_Time_Data.field.Month);
-        Previous_Date_Time_Data.field.Year = Today_Date_Time_Data.field.Year;
+        Current_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month;     // so set yesterday month
+        console_print("Current Month now set to " + New_Date_Time_Data.field.Month);
+        Current_Date_Time_Data.field.Year = New_Date_Time_Data.field.Year;
     }
 }
-void console_print(String Console_Message) {
-    console.print(millis(), DEC); console.println("\t" + Console_Message);
+void console_print(String Monitor_Message) {
+    console.print(millis(), DEC); console.println("\t" + Monitor_Message);
 }
 void Month_End_Process() {
     int month_datatemp = 0;
@@ -702,21 +681,19 @@ void Month_End_Process() {
     int month_data_field_number = 0;
     int file_count = 0;
     int csv_count = 0;
-    Print_Monitor_Messages = false;
-    String file_month = "00";
+    String month_end_file_month = "00";
     String this_file_month = "00";
-    console_print("Commencing Month End Process");
-    Send_WhatsApp_Message("Power Monitor - Month End Process Commenced");
+    console_print("Commencing Month End Process for " + String(Month_End_Date_Time_Data.field.Month));
+    Send_WhatsApp_Message("Power Monitor - Month End Process Commenced for " + String(Month_Names[Month_End_Date_Time_Data.field.Month]));
     ConcatenationFileName = "MF";                                               // "MF" - create the month file name
-    ConcatenationFileName += String(Previous_Date_Time_Data.field.Year);       // "MF1951"
-    if (Previous_Date_Time_Data.field.Month < 10) {
-        file_month = "0";
-        file_month += String(Previous_Date_Time_Data.field.Month);
+    ConcatenationFileName += String(Month_End_Date_Time_Data.field.Year);       // "MF1951"
+    if (Month_End_Date_Time_Data.field.Month < 10) {
+        month_end_file_month = "0" + String(Month_End_Date_Time_Data.field.Month);
     }
     else {
-        file_month = String(Previous_Date_Time_Data.field.Month);
+        month_end_file_month = String(Month_End_Date_Time_Data.field.Month);
     }
-    ConcatenationFileName += file_month + ".csm";                                            // "MF195111.csm"
+    ConcatenationFileName += month_end_file_month + ".csm";                                            // "MF195111.csm"
     console_print("\tStage 1. Create a Concatenation File - " + ConcatenationFileName);
     if (SD.exists("/" + ConcatenationFileName)) {           // check if the monthly file exists, if so delete it
         SD.remove("/" + ConcatenationFileName);
@@ -741,10 +718,10 @@ void Month_End_Process() {
     console_print("\tStage 2. Create an array of the .csv files names");
     file_count = Count_Files_on_SD_Drive();                                       // creates an array of filenames
     csv_count = 0;
-    console_print("\t\tLooking for .csv files with month of " + file_month);
-    for (int file = 0; file < file_count; file++) {              // select .cvs file names from the previous month
-        if (FileNames[file].indexOf(file_month) == 4) {
-            if (FileNames[file].indexOf(".csv") == 8) {
+    console_print("\t\tLooking for .csv files with month of " + month_end_file_month);
+    for (int file = 0; file < file_count; file++) {                             // select .cvs file names from the month end month
+        if (FileNames[file].indexOf(month_end_file_month) == 6) {               // MF1951xx.csv
+            if (FileNames[file].indexOf(".csv") == 8) {                         // 012345678select only ,csv files
                 Csv_File_Names[csv_count] = "";
                 for (int x = 0; x < 8; x++) {
                     Csv_File_Names[csv_count] += FileNames[file][x];          // move the filename, minus the extension
@@ -757,9 +734,6 @@ void Month_End_Process() {
         console_print("\t\tNo relevant files");
         console_print("Month End Process Terminated");
         Send_WhatsApp_Message("Power Monitor - Month End Process Terminated - No relevant files to concatenate, " + ConcatenationFileName + " Removed");
-        SD.remove("/" + ConcatenationFileName);
-        console_print("\t\t" + ConcatenationFileName + " Removed");
-        Print_Monitor_Messages = true;
         return;
     }
     console_print("\t\tThere are " + String(csv_count) + ".csv files");
@@ -785,18 +759,16 @@ void Month_End_Process() {
             Check_Red_Switch("Power Monitor - Error opening Source File");
         }
         console_print("\t\tProcessing " + SourceFileName);
-        Flash_SD_LED();
-        Concatenation_Data_Record_Start_Time = millis();
-        First_Concatenation_Data_Record_Start_Time = Concatenation_Data_Record_Start_Time;
-        while (SourceDataFile.available()) {              // throw the first row of each file away (column headers)
-            month_datatemp = SourceDataFile.read();                           // read a character from the DataFile
-            if (month_datatemp == '\n') break;                                   // finish when end of row detected
+        while (SourceDataFile.available()) {                                // throw the first row of each file away (column headers)
+            month_datatemp = SourceDataFile.read();                         // read a character from the DataFile
+            if (month_datatemp == '\n') break;                              // finish when end of row detected
         }
-        while (SourceDataFile.available()) {                                   // do while there are data available
-            month_datatemp = SourceDataFile.read();                           // read a character from the DataFile
-            month_field[month_character_count++] = month_datatemp; // add the read character to the csvfield string
-            if (month_datatemp == ',' || month_datatemp == '\n') {    // look for end of field, comma or end of row
-                month_field[month_character_count - 1] = '\0';                              // make Field a String
+        while (SourceDataFile.available()) {                                // do while there are data available
+            digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));         // flash the blue led
+            month_datatemp = SourceDataFile.read();                         // read a character from the DataFile
+            month_field[month_character_count++] = month_datatemp;          // add the read character to the csvfield string
+            if (month_datatemp == ',' || month_datatemp == '\n') {          // look for end of field, comma or end of row
+                month_field[month_character_count - 1] = '\0';              // make Field a String
                 switch (month_data_field_number) {
                 case 0: {
                     for (int x = 0; x < 11; x++) {
@@ -808,7 +780,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                    }
+                }
                 case 1: {
                     for (int x = 0; x < 9; x++) {
                         Concatenation_Data_Record.field.ltime[x] = month_field[x];
@@ -819,7 +791,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                    }
+                }
                 case 2: {
                     Concatenation_Data_Record.field.Voltage = atof(month_field);                         // Voltage
 #ifdef PRiNT_MONTH_DATA_VALUES
@@ -987,7 +959,7 @@ void Month_End_Process() {
                     console_print(message);
 #endif            
                     break;
-                    }
+                }
                 default: {
                     break;
                 }
@@ -995,7 +967,7 @@ void Month_End_Process() {
                 month_data_field_number++;
                 month_field[0] = '\0';
                 month_character_count = 0;
-                } // assembling the fields - end of if line end  
+            } // assembling the fields - end of if line end  
             if (month_datatemp == '\n') {// if the character /n (end of line) save fields to the Concatenation File
                 month_data_field_number = 0;
                 ConcatenationFile.print(Concatenation_Data_Record.field.ldate);
@@ -1044,13 +1016,13 @@ void Month_End_Process() {
                     server.handleClient();                                  // handle any messages from the website
                 }
             } // end of end of line detected
-                }// end of while
+        }// end of while
         console_print("\t\t" + SourceFileName + " Processing Complete");
         SourceDataFile.close();                                                               // close the DataFile 
         SourceDataFile.flush();
         ConcatenationFile.close();                                  // close the ConcatenationFile to preserve file
         ConcatenationFile.flush();
-                }
+    }
     console_print("\tStage 5. Delete Data Files");
     String fileName = "/99999999.csv";
     for (int i = 0; i < csv_count; i++) {
@@ -1061,8 +1033,7 @@ void Month_End_Process() {
     console_print("\tFile Deletion Completed");
     console_print("Month End Process Complete");
     Send_WhatsApp_Message("Power Monitor - Month End Process Complete, " + ConcatenationFileName + " Now available for download");
-    Print_Monitor_Messages = true;                                  // re enable monitor messages
-            }
+}
 void Send_WhatsApp_Message(String message) {
     String WhatsApp_url = "https://api.callmebot.com/whatsapp.php?phone=447785938200&apikey=8876034&text=" + urlEncode(message);
     HTTPClient http;
@@ -1079,17 +1050,13 @@ void Send_WhatsApp_Message(String message) {
     http.end();
 }
 void Write_New_Data_Record_to_Data_File() {
-    digitalWrite(Blue_led_pin, HIGH);                                                // turn the SD activity LED on
-    DataFile = SD.open("/" + DataFileName, FILE_APPEND);                                        // open the SD file
-    if (!DataFile) {                                                                  // oops - file not available!
-        if (Print_Monitor_Messages) {
-            console_print("Error re-opening DataFile:" + String(DataFileName));
-        }
+    digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                              // flash the SD activity LED on
+    DataFile = SD.open("/" + DataFileName, FILE_APPEND);                                // open the SD file
+    if (!DataFile) {                                                                    // oops - file not available!
+        console_print("Error re-opening DataFile:" + String(DataFileName));
         Check_Red_Switch("Power Monitor - Error re-opening DataFile: " + String(DataFileName));
     }
-    if (Print_Monitor_Messages) {
-        console_print("New Data Record Written to " + DataFileName);
-    }
+    console_print("New Data Record Written to " + DataFileName);
     DataFile.print(Current_Data_Record.field.ldate); DataFile.print(",");               // [00] Date
     DataFile.print(Current_Data_Record.field.ltime); DataFile.print(",");               // [01] Time
     DataFile.print(Current_Data_Record.field.Voltage); DataFile.print(",");             // [02] Voltage
@@ -1114,7 +1081,6 @@ void Write_New_Data_Record_to_Data_File() {
     DataFile.close();                                                                   // close the sd file
     DataFile.flush();                                                        // make sure it has been written to SD
     Data_Record_Count++;                                                      // increment the current record count
-    digitalWrite(Blue_led_pin, LOW);                                                 // turn the SD activity LED on
     if (Current_Data_Record.field.Voltage >= Highest_Voltage || Highest_Voltage == 0) {
         Date_of_Highest_Voltage = Current_Data_Record.field.ldate;
         Time_of_Highest_Voltage = Current_Data_Record.field.ltime;
@@ -1157,9 +1123,7 @@ void Check_SD_Space() {
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
     SD_freespace_double = (double)SD_freespace / 1000000;
     if (SD_freespace < Critical_SD_Freespace) {
-        if (Print_Monitor_Messages) {
-            console_print("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
-        }
+        console_print("WARNING - SD Free Space critical " + String(SD_freespace) + "MBytes");
         Send_WhatsApp_Message("Power Monitor - SD Space Critical " + String(SD.usedBytes() / 1000000) + " MBytes used");
     }
 }
@@ -1198,45 +1162,39 @@ void Add_New_Data_Record_to_Display_Table() {
 }
 void Create_or_Open_New_Data_File() {
     Update_Current_Timeinfo();
-    DataFileName = String(Current_Date_Without) + ".csv";
-    digitalWrite(Blue_led_pin, HIGH);
+    DataFileName = String(Current_Date_Without) + ".csv";                           // create the file name for the current date
     if (!SD.exists("/" + DataFileName)) {
-        DataFile = SD.open("/" + DataFileName, FILE_WRITE);
-        if (!DataFile) {                                                                   // log file not opened
-            if (Print_Monitor_Messages) {
-                console_print("Error opening Data file in Create New Data File [" + String(DataFileName) + "]");
-            }
-            Check_Red_Switch("Power Monitor - Error opening Data file");
+        DataFile = SD.open("/" + DataFileName, FILE_WRITE);                         // does not exist so create it for write
+        if (!DataFile) {
+            console_print("Error creating Data file: " + String(DataFileName));
+            Check_Red_Switch("Power Monitor - Error creating Data file: " + String(DataFileName));
         }
-        if (Print_Monitor_Messages) {
-            console_print("Day Data File " + DataFileName + " Created");
-        }
-        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) { // write data column headings into the SD file
+        console_print("Day Data File " + DataFileName + " created");
+        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {                // write data column headings into the SD file
             DataFile.print(Column_Field_Names[x]);
             DataFile.print(",");
         }
         DataFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
-        if (Print_Monitor_Messages) {
-            console_print("Column Headings written to Day Data File");
-        }
+        console_print("Column Headings written to Day Data File");
         DataFile.close();
         DataFile.flush();
-        if (Print_Monitor_Messages) {
-            console_print("Day Data File Closed");
-        }
+        console_print("Day Data File Closed and Flushed");
         Data_Record_Count = 0;
-        digitalWrite(Blue_led_pin, LOW);
-        Update_Current_Timeinfo();
-        This_Date_With = Current_Date_With;                                             // update the current date
-        This_Date_Without = Current_Date_Without;
-        This_Day = Today_Date_Time_Data.field.Day;
     }
-    else {
-        if (Print_Monitor_Messages) {
-            console_print("Data File " + String(DataFileName) + " already exists");
+    else {                                                                          // file already exists, so open it for append
+        DataFile = SD.open("/" + DataFileName, FILE_APPEND);                        // yes so open it for append
+        if (!DataFile) {                                                            // log file not opened
+            console_print("Error opening Data file: " + String(DataFileName));
+            Check_Red_Switch("Power Monitor - Error reopening Data File " + String(DataFileName));
         }
+        console_print("Day Data File " + DataFileName + " reopened for append");
+        DataFile.close();
+        DataFile.flush();
         Prefill_Data_Array();
     }
+    This_Date_With = Current_Date_With;                                             // update the current date
+    This_Date_Without = Current_Date_Without;
+    This_Day = Current_Date_Time_Data.field.Day;
 }
 void Check_WiFi() {
     int wifi_connection_attempts = 0;
@@ -1291,20 +1249,16 @@ void Prefill_Data_Array() {
     int field_number = 0;
     char data_temp;
     String message;
-    //    double record_time = 0;
-    SD_Led_Flash_Start_Stop(true);                                          // start the sd led flashing
+    digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                          // flash the blue led
     console_print("Loading DataFile from " + String(DataFileName));
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
-    Data_Record_Start_Time = millis();
-    First_Data_Record_Start_Time = Data_Record_Start_Time;
-    //    console.print(millis(), DEC); console.print("\t");
     if (DataFile) {
         while (DataFile.available()) {                                 // throw the first row, column headers, away
             data_temp = DataFile.read();
             if (data_temp == '\n') break;
         }
         while (DataFile.available()) {                                       // do while there are data available
-            Flash_SD_LED();                                                 // flash the sd led
+            digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));
             data_temp = DataFile.read();
             field[character_count++] = data_temp;                        // add it to the csvfield string
             if (data_temp == ',' || data_temp == '\n') {                              // look for end of field
@@ -1550,20 +1504,6 @@ void Prefill_Data_Array() {
                 Update_Webpage_Variables_from_Table(Data_Table_Pointer); // update web variables with record just saved
                 Data_Table_Pointer++;                                          // increment the table array pointer
                 Data_Record_Count++;                                          // increment the running record total
-                /*
-                console.print(".");
-                if ((Data_Record_Count % 400) == 0) {
-                    record_time = ((double)millis() - (double)Data_Record_Start_Time) / (double)1000 / (double)400;
-                    console.print(" (");
-                    console.print(Data_Record_Count);
-                    console.print(")\t[");
-                    console.print(record_time, 5);
-                    console.println("s]");
-                    console.print(millis(), DEC);                                             // start another line
-                    console.print("\t");
-                    Data_Record_Start_Time = millis();
-                }
-                */
                 if (Data_Table_Pointer == Data_Table_Size) {               // if pointer is greater than table size
                     Shuffle_Data_Table();
                     Data_Table_Pointer = Data_Table_Size - 1;
@@ -1573,23 +1513,7 @@ void Prefill_Data_Array() {
         } // end of while
     }
     DataFile.close();
-    /*
-        console.print(" ("); console.print(Data_Record_Count);
-        console.print(") [");
-        record_time = (double)millis() - (double)First_Data_Record_Start_Time;
-        record_time /= (double)Data_Record_Count;
-        record_time /= (double)1000;
-        console.print("[");
-        if (Data_Record_Count > 0) {
-            console.print(record_time, 5);
-        }
-        else {
-            console.print(millis() - First_Data_Record_Start_Time);
-        }
-        console.println("s]");
-    */
     console_print("Loaded Data Records: " + String(Data_Record_Count));
-    SD_Led_Flash_Start_Stop(false);
 }
 void Shuffle_Data_Table() {
 #ifdef PRiNT_SHUFFLiNG_DATA_VALUES
@@ -1619,8 +1543,8 @@ void Shuffle_Data_Table() {
         Readings_Table[i].field.wind_direction = Readings_Table[i + 1].field.wind_direction;            // wdir
         Readings_Table[i].field.gas_volume = Readings_Table[i + 1].field.gas_volume;                    // gas v
         strncpy(Readings_Table[i].field.weather_description, Readings_Table[i + 1].field.weather_description, sizeof(Readings_Table[i].field.weather_description));// [19] weather description
-        }
     }
+}
 void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     if (Readings_Table[Data_Table_Pointer].field.Voltage >= Highest_Voltage || Highest_Voltage == 0) {
         Date_of_Highest_Voltage = String(Readings_Table[Data_Table_Pointer].field.ldate);
@@ -1654,9 +1578,7 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
 }
 void i_Display() {
     double maximum_Amperage = 0;
-    if (Print_Monitor_Messages) {
-        console_print("Web Display of Graph Requested via Webpage");
-    }
+    console_print("Web Display of Graph Requested via Webpage");
     webpage = "";
     Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
     webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
@@ -1734,9 +1656,7 @@ void i_Display() {
     lastcall = "display";
 }
 void i_Web_Reset() {
-    if (Print_Monitor_Messages) {
-        console_print("Web Reset of Processor Requested via Webpage");
-    }
+    console_print("Web Reset of Processor Requested via Webpage");
     ESP.restart();
 }
 void Page_Header(bool refresh, String Header) {
@@ -1809,9 +1729,7 @@ void Page_Footer() {
 }
 void i_Information() {                                                    // Display file size of the datalog file
     int file_count = Count_Files_on_SD_Drive();
-    if (Print_Monitor_Messages) {
-        console_print("Web Display of information Requested via Webpage");
-    }
+    console_print("Web Display of information Requested via Webpage");
     String ht = String(Date_of_Highest_Voltage + " at " + Time_of_Highest_Voltage + " as ");
     ht += String(Highest_Voltage) + " volts";
     String lt = String(Date_of_Lowest_Voltage + " at " + Time_of_Lowest_Voltage + " as ");
@@ -2008,9 +1926,7 @@ void i_Information() {                                                    // Dis
 void i_Download_Files() {
     int file_count = Count_Files_on_SD_Drive();             // this counts and creates an array of file names on SD
     sortArray(FileNames, file_count);         // sort into rising order
-    if (Print_Monitor_Messages) {
-        console_print("Download of Files Requested via Webpage");
-    }
+    console_print("Download of Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Download Files");
     if (file_count > 0) {
         for (int i = 0; i < file_count; i++) {
@@ -2029,9 +1945,7 @@ void i_Download_Files() {
 }
 void i_Download_File() {                                                              // download the selected file
     String fileName = server.arg("file");
-    if (Print_Monitor_Messages) {
-        console_print("Download of File " + fileName + " Requested via Webpage");
-    }
+    console_print("Download of File " + fileName + " Requested via Webpage");
     File DataFile = SD.open("/" + fileName, FILE_READ);                                   // Now read data from FS
     if (DataFile) {                                                                          // if there is a file
         if (DataFile.available()) {                                            // if data is available and present
@@ -2056,9 +1970,7 @@ void i_Delete_Files() {                                            // allow the 
     int file_count = 0;
     file_count = Count_Files_on_SD_Drive();                 // this counts and creates an array of file names on SD
     sortArray(FileNames, file_count);         // sort into rising order
-    if (Print_Monitor_Messages) {
-        console_print("Delete Files Requested via Webpage");
-    }
+    console_print("Delete Files Requested via Webpage");
     Page_Header(false, "Energy Monitor Delete Files");
     if (file_count > 0) {
         for (int i = 0; i < file_count; i++) {
@@ -2080,9 +1992,7 @@ void i_Del_File() {                                                             
     String fileName = "/20221111.csv";                              // dummy load to get the string space reserved
     fileName = "/" + server.arg("file");
     SD.remove(fileName);
-    if (Print_Monitor_Messages) {
-        console_print(fileName + " Removed");
-    }
+    console_print(fileName + " Removed");
     webpage = "";                               // don't delete this command, it ensures the server works reliably!
     file_count = Count_Files_on_SD_Drive();                // this counts and creates an array of file names on SD
     Page_Header(false, "Energy Monitor Delete Files");
@@ -2130,25 +2040,19 @@ int Count_Files_on_SD_Drive() {
     return (file_count);
 }
 void i_Wipe_Files() {                                                // selected by pressing combonation of buttons
-    if (Print_Monitor_Messages) {
-        console_print("Start of Wipe Files Request by Switch");
-    }
+    console_print("Start of Wipe Files Request by Switch");
     String filename;
     File root = SD.open("/");                                                          //  Open the root directory
     while (true) {
         File entry = root.openNextFile();                                                    //  get the next file
         if (entry) {
             filename = entry.name();
-            if (Print_Monitor_Messages) {
-                console_print("Removing " + filename);
-            }
+            console_print("Removing " + filename);
             SD.remove(entry.name());                                                           //  delete the file
         }
         else {
             root.close();
-            if (Print_Monitor_Messages) {
-                console_print("All files removed from root directory, rebooting");
-            }
+            console_print("All files removed from root directory, rebooting");
             ESP.restart();
         }
     }
@@ -2174,10 +2078,8 @@ void Receive(int field) {
     do {
         while (!RS485_Port.available()) {                                          // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {         // no data received within 500 ms so timeout
-                if (Print_Monitor_Messages) {
-                    console_print("No Reply from RS485 within 500 ms");
-                    Check_Red_Switch("Power Monitor - No Reply from RS485 within 500ms");                           // Reset will restart the processor so no return
-                }
+                console_print("No Reply from RS485 within 500 ms");
+                Check_Red_Switch("Power Monitor - No Reply from RS485 within 500ms"); // Reset will restart the processor so no return
             }
         }
         value_status = true;                          // set the value status to true, which is true at this point
@@ -2282,9 +2184,7 @@ void Receive(int field) {
             break;
         }
         default: {
-            if (Print_Monitor_Messages) {
-                console.print(millis(), DEC); console.println("\tRequested Fields != Received Fields");
-            }
+            console.print(millis(), DEC); console.println("\tRequested Fields != Received Fields");
             break;
         }
         }
@@ -2300,35 +2200,32 @@ void Receive(int field) {
 void Check_Blue_Switch() {
     Blue_Switch.update();
     if (Blue_Switch.fell()) {
-        if (Print_Monitor_Messages) {
-            console_print("Blue Button Pressed");
-        }
+        console_print("Blue Button Pressed, executing Month End Procedure");
         Blue_Switch_Pressed = true;
         Update_Current_Timeinfo();
-        //        console_print("Today Month = " + String(Today_Date_Time_Data.field.Month));
-        Previous_Date_Time_Data.field.Month = Today_Date_Time_Data.field.Month - 1;     // so set yesterday month
-        Previous_Date_Time_Data.field.Year = Today_Date_Time_Data.field.Year;
-        if (Previous_Date_Time_Data.field.Month < 1) {                                  // cope with Today Month = 1 (January)
-            Previous_Date_Time_Data.field.Month = 12;
+        console_print("Today's Actual Month = " + String(New_Date_Time_Data.field.Month));
+        Month_End_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month - 1;     // so set yesterday month
+        if (Month_End_Date_Time_Data.field.Month < 1) {                                  // cope with previous Today Month = 1 (January)
+            Month_End_Date_Time_Data.field.Month = 12;
+            Month_End_Date_Time_Data.field.Year = New_Date_Time_Data.field.Year - 1;
         }
-        //        console_print("Previous Month = " + String(Previous_Date_Time_Data.field.Month));
+        else {
+            Month_End_Date_Time_Data.field.Year = New_Date_Time_Data.field.Year;
+        }
+        console_print("Month End Month set to " + String(Month_End_Date_Time_Data.field.Month));
+        console_print("Month End Year set to " + String(Month_End_Date_Time_Data.field.Year));
         Month_End_Process();
-        Previous_Date_Time_Data.field.Month = Today_Date_Time_Data.field.Month;         // reset the previous month 
-        //        console_print("Previous Month Reset to " + Today_Date_Time_Data.field.Month);
+        Update_Current_Timeinfo();                                                  // reset the date
     }
     if (Blue_Switch.rose()) {
-        if (Print_Monitor_Messages) {
-            console_print("Blue Button Released");
-        }
+        console_print("Blue Button Released");
         Blue_Switch_Pressed = false;
     }
 }
 void Check_Gas_Switch() {
     Gas_Switch.update();                                                                // read the gas switch
     if (Gas_Switch.fell()) {
-        if (Print_Monitor_Messages) {
-            console_print("Gas Switch Fell");
-        }
+        console_print("Gas Switch Fell");
         Current_Data_Record.field.gas_volume += Gas_Volume_Per_Sensor_Rise; // +gas when gas switch on rising edge
         Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
         Latest_Gas_Date_With = Current_Date_With;
@@ -2336,10 +2233,7 @@ void Check_Gas_Switch() {
         digitalWrite(Green_led_pin, !digitalRead(Green_led_pin)); // flash the green light if Gas Switch changed
     }
     if (Gas_Switch.rose()) {
-        if (Print_Monitor_Messages) {
-            console_print("Gas Switch Rose");
-        }
-
+        console_print("Gas Switch Rose");
     }
 }
 void Check_Red_Switch(String message) {
@@ -2349,9 +2243,7 @@ void Check_Red_Switch(String message) {
         digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));
         Red_Switch.update();
         if (Red_Switch.fell()) {
-            if (Print_Monitor_Messages) {
-                console_print("Red Button Pressed");
-            }
+            console_print("Red Button Pressed");
             ESP.restart();
         }
         delay(500);
@@ -2360,16 +2252,12 @@ void Check_Red_Switch(String message) {
 void Check_Yellow_Switch() {
     Yellow_Switch.update();
     if (Yellow_Switch.fell()) {
-        if (Print_Monitor_Messages) {
-            console_print("Yellow Button Pressed");
-        }
+        console_print("Yellow Button Pressed");
         Yellow_Switch_Pressed = true;
         Month_End_Process();
     }
     if (Yellow_Switch.rose()) {
-        if (Print_Monitor_Messages) {
-            console_print("Yellow Button Released");
-        }
+        console_print("Yellow Button Released");
         Yellow_Switch_Pressed = false;
     }
 }
@@ -2383,32 +2271,8 @@ void Clear_Arrays() {                                                       // c
         Current_Data_Record.character[x] = 0;
     }
 }
-void SD_Led_Flash_Start_Stop(bool state) {
-    if (state) {
-        digitalWrite(Blue_led_pin, HIGH);                                              // turn the led on (flash)
-        sd_on_time = millis();                                                  // set the start time (immediate)
-        sd_off_time = millis() + (unsigned long)300;                         // set the stoptime (start + period)
-    }
-    else {
-        digitalWrite(Blue_led_pin, LOW);                                                     // turn the led off
-    }
-}
-void Flash_SD_LED() {
-    if (millis() > sd_on_time && millis() < sd_off_time) {                            // turn the led on (flash)
-        digitalWrite(Blue_led_pin, HIGH);
-    }
-    else {
-        digitalWrite(Blue_led_pin, LOW);
-    }
-    if (millis() >= (sd_off_time)) {                                                 // turn the led on (flash)
-        sd_on_time = millis() + (unsigned long)300;                             // set the next on time (flash)
-        sd_off_time = millis() + (unsigned long)600;
-    }
-}
 void SetTimeZone(String timezone) {
-    if (Print_Monitor_Messages) {
-        console_print("Setting Timezone to " + String(timezone));
-    }
+    console_print("Setting Timezone to " + String(timezone));
     setenv("TZ", timezone.c_str(), 1);                                    // ADJUST CLOCK SETiNGS TO LOCAL TiME
     tzset();
 }
@@ -2416,76 +2280,72 @@ void Update_Current_Timeinfo() {
     int connection_attempts = 0;
     String temp;
     while (!getLocalTime(&timeinfo)) {                                      // get date and time from ntpserver
-        if (Print_Monitor_Messages) {
-            console_print("Attempting to Get Date " + String(connection_attempts));
-        }
+        console_print("Attempting to Get Date " + String(connection_attempts));
         delay(500);
         connection_attempts++;
         if (connection_attempts > 20) {
-            if (Print_Monitor_Messages) {
-                console_print("Time Network Error, Restarting");
-            }
+            console_print("Time Network Error, Restarting");
             Send_WhatsApp_Message("Power Monitor - Time Network Error, Restarting");
             ESP.restart();
         }
     }
-    Today_Date_Time_Data.field.Year = timeinfo.tm_year + 1900;
-    Today_Date_Time_Data.field.Month = timeinfo.tm_mon + 1;
-    Today_Date_Time_Data.field.Day = timeinfo.tm_mday;
-    Today_Date_Time_Data.field.Hour = timeinfo.tm_hour;
-    Today_Date_Time_Data.field.Minute = timeinfo.tm_min;
-    Today_Date_Time_Data.field.Second = timeinfo.tm_sec;
+    New_Date_Time_Data.field.Year = timeinfo.tm_year + 1900;
+    New_Date_Time_Data.field.Month = timeinfo.tm_mon + 1;
+    New_Date_Time_Data.field.Day = timeinfo.tm_mday;
+    New_Date_Time_Data.field.Hour = timeinfo.tm_hour;
+    New_Date_Time_Data.field.Minute = timeinfo.tm_min;
+    New_Date_Time_Data.field.Second = timeinfo.tm_sec;
     // DATE --
-    Current_Date_With = String(Today_Date_Time_Data.field.Year);        //  1951
-    Current_Date_Without = String(Today_Date_Time_Data.field.Year);        //  1951
+    Current_Date_With = String(New_Date_Time_Data.field.Year);        //  1951
+    Current_Date_Without = String(New_Date_Time_Data.field.Year);        //  1951
     Current_Date_With += "/";                                         //  1951/
-    if (Today_Date_Time_Data.field.Month < 10) {
+    if (New_Date_Time_Data.field.Month < 10) {
         Current_Date_With += "0";                                         //  1951/0
         Current_Date_Without += "0";
     }
-    Current_Date_With += String(Today_Date_Time_Data.field.Month);      //  1951/11
-    Current_Date_Without += String(Today_Date_Time_Data.field.Month);
+    Current_Date_With += String(New_Date_Time_Data.field.Month);      //  1951/11
+    Current_Date_Without += String(New_Date_Time_Data.field.Month);
     Current_Date_With += "/";                                         //  1951/11/
 
-    if (Today_Date_Time_Data.field.Day < 10) {
+    if (New_Date_Time_Data.field.Day < 10) {
         Current_Date_With += "0";                                         //  1951/11/0
         Current_Date_Without += "0";
     }
-    Current_Date_With += String(Today_Date_Time_Data.field.Day);        //  1951/11/18
-    Current_Date_Without += String(Today_Date_Time_Data.field.Day);        //  1951/11/18
+    Current_Date_With += String(New_Date_Time_Data.field.Day);        //  1951/11/18
+    Current_Date_Without += String(New_Date_Time_Data.field.Day);        //  1951/11/18
     // TiME --
     Current_Time_With = "";
     Current_Time_Without = "";
-    if (Today_Date_Time_Data.field.Hour < 10) {                           // if hours are less than 10 add a 0
+    if (New_Date_Time_Data.field.Hour < 10) {                           // if hours are less than 10 add a 0
         Current_Time_With = "0";
         Current_Time_Without = "0";
     }
-    Current_Time_With += String(Today_Date_Time_Data.field.Hour);       //  add hours
-    Current_Time_Without += String(Today_Date_Time_Data.field.Hour);       //  add hours
+    Current_Time_With += String(New_Date_Time_Data.field.Hour);       //  add hours
+    Current_Time_Without += String(New_Date_Time_Data.field.Hour);       //  add hours
     Current_Time_With += ":";                                         //  23:
-    if (Today_Date_Time_Data.field.Minute < 10) {                         //  if minutes are less than 10 add a 0
+    if (New_Date_Time_Data.field.Minute < 10) {                         //  if minutes are less than 10 add a 0
         Current_Time_With += "0";                                         //  23:0
         Current_Time_Without += "0";
     }
-    Current_Time_With += String(Today_Date_Time_Data.field.Minute);     //  23:59
-    Current_Time_Without += String(Today_Date_Time_Data.field.Minute);     //  23:59
+    Current_Time_With += String(New_Date_Time_Data.field.Minute);     //  23:59
+    Current_Time_Without += String(New_Date_Time_Data.field.Minute);     //  23:59
     Current_Time_With += ":";                                         //  23:59:
-    if (Today_Date_Time_Data.field.Second < 10) {
+    if (New_Date_Time_Data.field.Second < 10) {
         Current_Time_With += "0";
         Current_Time_Without += "0";
     }
-    Current_Time_With += String(Today_Date_Time_Data.field.Second);     //  23:59:59
-    Current_Time_Without += String(Today_Date_Time_Data.field.Second);     //  23:59:59
+    Current_Time_With += String(New_Date_Time_Data.field.Second);     //  23:59:59
+    Current_Time_Without += String(New_Date_Time_Data.field.Second);     //  23:59:59
     Standard_Format_Date = "";
-    if (Today_Date_Time_Data.field.Day < 10) {
+    if (New_Date_Time_Data.field.Day < 10) {
         Standard_Format_Date += "0";                                         //  1951/11/0
     }
-    Standard_Format_Date += String(Today_Date_Time_Data.field.Day) + "/";    //  18/
-    if (Today_Date_Time_Data.field.Month < 10) {
+    Standard_Format_Date += String(New_Date_Time_Data.field.Day) + "/";    //  18/
+    if (New_Date_Time_Data.field.Month < 10) {
         Standard_Format_Date += "0";                                         //  1951/0
     }
-    Standard_Format_Date += String(Today_Date_Time_Data.field.Month) + "/";      //  1951/11
-    Standard_Format_Date += String(Today_Date_Time_Data.field.Year);        //  1951
+    Standard_Format_Date += String(New_Date_Time_Data.field.Month) + "/";      //  1951/11
+    Standard_Format_Date += String(New_Date_Time_Data.field.Year);        //  1951
 }
 void Parse_Weather_info(String payload) {
     /*
@@ -2512,43 +2372,43 @@ void Parse_Weather_info(String payload) {
     start = payload.indexOf("temp\":");             // "temp":272.77,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.weather_temperature = (double)(atof(Parse_Output)) - (double)273.15;
     // Temperature Feels Like --------------
     start = payload.indexOf("feels_like");          // "feels_like":283.47,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.temperature_feels_like = (double)(atof(Parse_Output)) - (double)273.15;
     // Temperature Maximum --
     start = payload.indexOf("temp_max");            // "temp_max":284.89,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.temperature_maximum = (double)(atof(Parse_Output)) - (double)273.15;
     // Temperature Minimum --
     start = payload.indexOf("temp_min");            // "temp_min":282.75,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.temperature_minimum = (double)(atof(Parse_Output)) - (double)273.15;
     // Pressure -------------
     start = payload.indexOf("pressure");            // "pressure":1018,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.atmospheric_pressure = (double)atof(Parse_Output);
     // humidity -------------
     start = payload.indexOf("humidity\":");         // "humidity":95}
     start = payload.indexOf(":", start);
     end = payload.indexOf("}", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.relative_humidity = (double)atof(Parse_Output);
     // weather description --
     start = payload.indexOf("description");         // "description":"overcast clouds",
     start = (payload.indexOf(":", start) + 1);
     end = (payload.indexOf(",", start) - 1);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     for (int x = 0; x < sizeof(Current_Data_Record.field.weather_description); x++) {
         Current_Data_Record.field.weather_description[x] = Parse_Output[x];
     }
@@ -2556,16 +2416,16 @@ void Parse_Weather_info(String payload) {
     start = payload.indexOf("speed");                   // "speed":2.57,
     start = payload.indexOf(":", start);
     end = payload.indexOf(",", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.wind_speed = (double)(atof(Parse_Output));
     // wind direction -------
     start = payload.indexOf("deg");                     // "deg":20
     start = payload.indexOf(":", start);
     end = payload.indexOf("}", start);
-    parse(payload, start, end);
+    Parse(payload, start, end);
     Current_Data_Record.field.wind_direction = (double)atof(Parse_Output);
 }
-void parse(String payload, int start, int end) {
+void Parse(String payload, int start, int end) {
     int ptr = 0;
     for (int pos = start + 1; pos < end; pos++) {
         Parse_Output[ptr++] = payload[pos];
