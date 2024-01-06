@@ -41,8 +41,10 @@ Change Record
 01/10/2023  12.12 Bug in Month End Process corrected (position in File name of month and .csv)
 28/10/2023  12:13 Omitted
 28/10/2023  12.14 Command added to send a test whatsapp message, and IP Hostname customized.
+01/11/2023  12.15 Kilowatt hour value on Information corrected
+06/01/2024  12.16 Whatsapp message now sent on reboot, Time added to Standard_Format_Date_Time
 */
-String version = "V12.14";
+String version = "V12.16";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -145,7 +147,7 @@ String This_Date_With = "1951/11/18";
 String This_Date_Without = "19511116";
 String This_Time_With = "00:00:00";
 String This_Time_Without = "000000";
-String Standard_Format_Date = "          ";
+String Standard_Format_Date_Time = "          ";
 constexpr int Days_n_Month[13][2] = {
     // Leap,Normal
             {00,00},
@@ -313,7 +315,7 @@ String Date_of_Highest_Voltage = "0000/00/00";
 double Highest_Amperage = 0;
 String Time_of_Highest_Amperage = "00:00:00";
 String Date_of_Highest_Amperage = "0000/00/00";
-double Cumulative_kwh = 0;
+//double Cumulative_kwh = 0;
 String Time_of_Latest_reading = "00:00:00";
 double Latest_weather_temperature = 0;
 double Latest_weather_temperature_feels_like = 0;
@@ -324,6 +326,7 @@ double Latest_relative_humidity = 0;
 double Latest_wind_speed = 0;
 double Latest_wind_direction = 0;
 String Latest_weather_description = "                                     ";
+double Latest_Kilowatthour = 0;
 constexpr int Days_in_Month[13][2] = {
     // Leap,Normal
             {00,00},// 
@@ -611,6 +614,7 @@ void loop() {
         console_print("Main Process Now Running");
         Once = true;
         digitalWrite(Green_led_pin, HIGH);
+        Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
     }
     Check_WiFi();                                                          // check that the WiFi is still connected
     Check_Blue_Switch(false);
@@ -659,12 +663,12 @@ void Check_NewDay() {
         if (Current_Date_Time_Data.field.Day < 1 || Current_Date_Time_Data.field.Day > 31) { // if the Previous Date not set, we have rebooted
             console_print("Reopening Data File");
             Create_or_Open_New_Data_File();                                         // open the day file, do not create a new one
-            Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date);
+            Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date_Time);
         }
         else {
             console_print("New Day Detected");                                      // proven day change
             Create_or_Open_New_Data_File();                                         // create a new day file
-            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date);
+            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time);
             Check_NewMonth();                                                       // if the date changed check if a new month started
         }
         Clear_Arrays();                                                             // clear memory
@@ -1050,7 +1054,7 @@ void Write_New_Data_Record_to_Data_File() {
         Time_of_Highest_Amperage = Current_Data_Record.field.ltime;
         Highest_Amperage = Current_Data_Record.field.Amperage;                  // update the largest current value
     }
-    Cumulative_kwh += Current_Data_Record.field.kilowatthour;
+    Latest_Kilowatthour = Current_Data_Record.field.kilowatthour;
     Time_of_Latest_reading = Current_Data_Record.field.ltime;
     Latest_weather_temperature = Current_Data_Record.field.weather_temperature;
     Latest_weather_temperature_feels_like = Current_Data_Record.field.temperature_feels_like;
@@ -1515,7 +1519,7 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
         Time_of_Highest_Amperage = String(Readings_Table[Data_Table_Pointer].field.ltime);
         Highest_Amperage = Readings_Table[Data_Table_Pointer].field.Amperage;  // update the largest current value
     }
-    Cumulative_kwh += Readings_Table[Data_Table_Pointer].field.kilowatthour;
+    Latest_Kilowatthour = Readings_Table[Data_Table_Pointer].field.kilowatthour;
     Latest_weather_temperature_feels_like = Readings_Table[Data_Table_Pointer].field.temperature_feels_like;
     Latest_weather_temperature_maximum = Readings_Table[Data_Table_Pointer].field.temperature_maximum;
     Latest_weather_temperature_minimum = Readings_Table[Data_Table_Pointer].field.temperature_minimum;
@@ -1633,7 +1637,7 @@ void i_Display() {
     }
     webpage += "]);\n";
     webpage += F("var options = {");
-    webpage += F("title:'Electrical and Gas Power Consumption logarithmic scale',");
+    webpage += F("title:'Electrical and Gas Consumption logarithmic scale',");
     webpage += F("titleTextStyle:{");
     webpage += F("fontName:'Arial',");
     webpage += F("fontSize: 20, ");
@@ -1757,7 +1761,7 @@ void i_Information() {                                                    // Dis
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
-    webpage += F("'>Highest Voltage was recorded on ");
+    webpage += F("'>Greatest Voltage was recorded on ");
     webpage += ht;
     webpage += "</span></strong></p>";
     webpage += F("<p ");
@@ -1765,7 +1769,7 @@ void i_Information() {                                                    // Dis
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
-    webpage += F(">Lowest Voltage was recorded on ");
+    webpage += F(">Least Voltage was recorded on ");
     webpage += lt;
     webpage += "</span></strong></p>";
     webpage += F("<p ");
@@ -1781,8 +1785,8 @@ void i_Information() {                                                    // Dis
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
-    webpage += F("'>Daily KiloWatt Hours: ");
-    webpage += String(Cumulative_kwh, 3);
+    webpage += F("'>Current KiloWatt Hours: ");
+    webpage += String(Latest_Kilowatthour, 3);
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // Row 11.Weather Latest Weather Temperature Feels Like, Maximum & Minimum --------------
@@ -2344,16 +2348,31 @@ void Update_Current_Timeinfo() {
     }
     Current_Time_With += String(New_Date_Time_Data.field.Second);     //  23:59:59
     Current_Time_Without += String(New_Date_Time_Data.field.Second);     //  23:59:59
-    Standard_Format_Date = "";
+    Standard_Format_Date_Time = "";
     if (New_Date_Time_Data.field.Day < 10) {
-        Standard_Format_Date += "0";                                         //  1951/11/0
+        Standard_Format_Date_Time += "0";                                         //  1951/11/0
     }
-    Standard_Format_Date += String(New_Date_Time_Data.field.Day) + "/";    //  18/
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Day) + "/";    //  18/
     if (New_Date_Time_Data.field.Month < 10) {
-        Standard_Format_Date += "0";                                         //  1951/0
+        Standard_Format_Date_Time += "0";                                         //  1951/0
     }
-    Standard_Format_Date += String(New_Date_Time_Data.field.Month) + "/";      //  1951/11
-    Standard_Format_Date += String(New_Date_Time_Data.field.Year);        //  1951
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Month) + "/";      //  1951/11
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Year);        //  1951
+    Standard_Format_Date_Time += " ";
+    if (New_Date_Time_Data.field.Hour < 10) {
+        Standard_Format_Date_Time += "0";                                         //  1951/11/0
+    }
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Hour);
+    Standard_Format_Date_Time += ":";
+    if (New_Date_Time_Data.field.Minute < 10) {
+        Standard_Format_Date_Time += "0";                                         //  1951/11/0
+    }
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Minute);
+    Standard_Format_Date_Time += ":";
+    if (New_Date_Time_Data.field.Second < 10) {
+        Standard_Format_Date_Time += "0";                                         //  1951/11/0
+    }
+    Standard_Format_Date_Time += String(New_Date_Time_Data.field.Second);
     if (Last_Time_Update != timeinfo.tm_min) {
         Last_Time_Update = timeinfo.tm_min;
         console_print("Current Date and Time set to: " + Current_Date_With + " " + Current_Time_With);
