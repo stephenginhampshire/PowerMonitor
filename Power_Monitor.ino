@@ -77,16 +77,21 @@ String version = "V12.16";
 #include <ESPmDNS.h>
 #include <UrlEncode.h>
 // -----------
-constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
+//constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
 const char* host = "esp32";
-const char* ssid = "Woodleigh";
-const char* password = "2008198399";
+const char* SSID = "Woodleigh";
+const char* Password = "2008198399";
+const char* NtpServer = "pool.ntp.org";
+const char Weather_City[] = { "Basingstoke\0" };
+const char Weather_Region[] = { "uk\0" };
+bool Weather_Enabled = true;
+bool WhatsApp_Enabled = true;
+//bool WhatsApp_Debug = true;
+//String WhatsApp_url_1 = "https://api.callmebot.com/whatsapp.php?phone=+447785938200&text=";
+//String WhatsApp_url_2 = "&apikey=8876034";
 String hostname = "Power Monitor " + version;
-const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 3600;                         // offset for the date and time function
-const char city[] = { "Basingstoke\0" };
-const char region[] = { "uk\0" };
 const String WiFi_Status_Message[7] = {
                     "WL_iDLE_STATUS",   // temporary status assigned when WiFi.begin() is called
                     "WL_NO_SSiD_AVAiL", // when no SSiD are available
@@ -148,6 +153,8 @@ String This_Date_Without = "19511116";
 String This_Time_With = "00:00:00";
 String This_Time_Without = "000000";
 String Standard_Format_Date_Time = "          ";
+unsigned long WhatsApp_Time = 0;                                // ensure we do not double send Whatsapp messages
+unsigned long Reset_Time = 0;
 constexpr int Days_n_Month[13][2] = {
     // Leap,Normal
             {00,00},
@@ -231,8 +238,10 @@ Data_Record_Union Current_Data_Record;
 Data_Record_Union Concatenation_Data_Record;
 // Data Table ---------------------------------------------------------------------------------------------------------
 int Data_Table_Pointer = 0;          // points to the next index of Data_Table
+//int Month_Table_Pointer = 0;
 int Data_Record_Count = 0;           // running total of records written to Data Table
 constexpr char Data_Table_Size = 60;
+constexpr int Month_Table_Size = (24 * 31);
 struct Data_Table_Record {
     char ldate[11];                 //  [0 - 10]  date record was taken
     char ltime[9];                  //  [11 - 19]  time record was taken
@@ -261,6 +270,7 @@ union Data_Table_Union {
     unsigned int characters[Data_Table_Record_Length];
 };
 Data_Table_Union Readings_Table[Data_Table_Size];
+int Wattage_Readings_Count = 0;
 /// ConcatenationFile Constants and Variables -------------
 File ConcatenationFile;
 String ConcatenationFileName = "M202301";       // .cvs
@@ -292,7 +302,7 @@ constexpr byte RS485_Requests[Number_of_RS485_Requests + 1][8] = {
                         {0x02,0x03,0x00,0x1E,0x00,0x01,0xE4,0x3F},// [6]  Request Hertz, in tenths of a hertz
                         {0x02,0x03,0x00,0x1A,0x00,0x01,0xA5,0xFE},// [7]  Request temperature, in degrees centigrade
 };
-String FileNames[50];
+String FileNames[200];
 bool Yellow_Switch_Pressed = false;
 bool Green_Switch_Pressed = false;
 bool Blue_Switch_Pressed = false;
@@ -315,7 +325,6 @@ String Date_of_Highest_Voltage = "0000/00/00";
 double Highest_Amperage = 0;
 String Time_of_Highest_Amperage = "00:00:00";
 String Date_of_Highest_Amperage = "0000/00/00";
-//double Cumulative_kwh = 0;
 String Time_of_Latest_reading = "00:00:00";
 double Latest_weather_temperature = 0;
 double Latest_weather_temperature_feels_like = 0;
@@ -357,7 +366,7 @@ typedef struct {
 weather_record_type Weather_Record;
 unsigned long Last_Cycle = 0;
 unsigned long Last_Weather_Read = 0;
-uint64_t SD_freespace = 0;
+unsigned long SD_freespace = 0;
 constexpr double Critical_SD_Freespace = 1;                     // bottom limit of SD space in MB
 double SD_freespace_double = 0;
 String Temp_Message;
@@ -481,10 +490,9 @@ void setup() {
     // WiFi and Web Setup -------------
     console_print("WiFi Configuration Commenced");
     WiFi.mode(WIFI_STA);
-    //    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
-    WiFi.setHostname(hostname.c_str()); //define hostname
-    StartWiFi(ssid, password);                  // Start WiFi
-    initTime("GMT0BST,M3.5.0/1,M10.5.0");   // initialise the Time library to London, GMT0BST,M3.5.0/1,M10.5.0
+    WiFi.setHostname(hostname.c_str());         //define hostname
+    StartWiFi(SSID, Password);                  // Start WiFi
+    initTime("GMT0BST,M3.5.0/1,M10.5.0");       // initialise Time library to London, GMT0BST,M3.5.0/1,M10.5.0
     console_print("Starting Server");
     server.begin();                             // Start Webserver
     console_print("Server Started");
@@ -549,7 +557,7 @@ void setup() {
     }
     else {
         console_print("SD Drive Begin Succeeded");
-        uint8_t cardType = SD.cardType();
+        char cardType = SD.cardType();
         while (SD.cardType() == CARD_NONE) {
             console_print("No SD Card Found");
             Check_Red_Switch("No SD Card Found");
@@ -568,7 +576,7 @@ void setup() {
             card = "UNKNOWN";
         }
         console_print("SD Card Type: " + card);
-        uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+        unsigned long cardSize = SD.cardSize() / (1024 * 1024);
         console_print("SD Card Size : " + String(cardSize) + "MBytes");
         console_print("SD Total Bytes : " + String(SD.totalBytes()));
         console_print("SD Used bytes : " + String(SD.usedBytes()));
@@ -585,25 +593,30 @@ void setup() {
     This_Date_With = Current_Date_With;
     This_Time_With = Current_Time_With;
     Create_or_Open_New_Data_File();
-    console_print("Preparing Customised Weather Request");
-    int count = 0;
-    for (int x = 0; x <= 120; x++) {
-        if (incomplete_Weather_Api_Link[x] == '\0') break;
-        if (incomplete_Weather_Api_Link[x] != '#') {
-            Complete_Weather_Api_Link[count] = incomplete_Weather_Api_Link[x];
-            count++;
-        }
-        else {
-            for (int y = 0; y < strlen(city); y++) {
-                Complete_Weather_Api_Link[count++] = city[y];
+    if (Weather_Enabled) {
+        console_print("Preparing Customised Weather Request");
+        int count = 0;
+        for (int x = 0; x <= 120; x++) {
+            if (incomplete_Weather_Api_Link[x] == '\0') break;
+            if (incomplete_Weather_Api_Link[x] != '#') {
+                Complete_Weather_Api_Link[count] = incomplete_Weather_Api_Link[x];
+                count++;
             }
-            Complete_Weather_Api_Link[count++] = ',';
-            for (int y = 0; y < strlen(region); y++) {
-                Complete_Weather_Api_Link[count++] = region[y];
+            else {
+                for (int y = 0; y < strlen(Weather_City); y++) {
+                    Complete_Weather_Api_Link[count++] = Weather_City[y];
+                }
+                Complete_Weather_Api_Link[count++] = ',';
+                for (int y = 0; y < strlen(Weather_Region); y++) {
+                    Complete_Weather_Api_Link[count++] = Weather_Region[y];
+                }
             }
         }
+        console_print("Weather Request Created: " + String(Complete_Weather_Api_Link));
     }
-    console_print("Weather Request Created: " + String(Complete_Weather_Api_Link));
+    else {
+        console_print("Weather not Enabled");
+    }
     digitalWrite(Blue_led_pin, LOW);
     console_print("End of Setup");
     console_print("Running in Full Function Mode");
@@ -616,47 +629,50 @@ void loop() {
         digitalWrite(Green_led_pin, HIGH);
         Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
     }
-    Check_WiFi();                                                          // check that the WiFi is still connected
+    Check_WiFi();                                                   // check that the WiFi is still connected
     Check_Blue_Switch(false);
-    Check_Gas_Switch();                                              // check if the gas switch sense pin has risen
-    Check_NewDay();                                                                // check if the date has changed
-    server.handleClient();                                                  // handle any messages from the website
-    if (millis() > Last_Cycle + (unsigned long)5000) {          // send requests every 5 seconds (5000 millisecods)
-        Get_Sensor_Data();
+    Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
+    Check_NewDay();                                                 // check if the date has changed
+    server.handleClient();                                          // handle any messages from the website
+    if (millis() > Last_Cycle + (unsigned long)5000) {              // send requests every 5 seconds (5000 millisecods)
+        Get_Variable_Data();
     }
     Check_SD_Space();
 }
 //------------
-void Get_Sensor_Data() {
-    //   console_print("Requesting Current Sensor and Weather information");
-    Last_Cycle = millis();                                             // update the last read milli second reading
-    // weather information request start ---
+void Get_Variable_Data() {
+    Last_Cycle = millis();
+    Get_Weather();
+    Get_Sensor();
+    Update_Current_Timeinfo();
+    Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
+    Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
+    Write_New_Data_Record_to_Data_Files();             // write the new record to SD Drive
+    Add_New_Data_Record_to_Display_Table();           // add the record to the display table
+}
+void Get_Sensor() {
+    for (int i = 0; i <= Number_of_RS485_Requests; i++) {     // transmit the requests, assembling the Values array
+        Send_Request(i);                                            // send the RS485 Port the requests, one by one
+        Receive(i);                                                                    // receive the sensor output
+    }                                                                         // all values should now be populated
+}
+void Get_Weather() {
+    Update_Current_Timeinfo();
     HTTPClient http;
-    http.begin(Complete_Weather_Api_Link);                                           // start the weather connectio
+    http.begin(Complete_Weather_Api_Link);                                          // start the weather connection
     int httpCode = http.GET();                                                                  // send the request
     if (httpCode > 0) {
         if (httpCode == HTTP_CODE_OK) {
             String payload = http.getString();
             Parse_Weather_info(payload);
+            //           console_print("Weather Information Obtained :" + String(Current_Data_Record.field.weather_description));
         }
         else {
             console_print("Obtaining Weather information Failed, Return code: " + String(httpCode));
         }
         http.end();
     }
-    // weather information request end -----
-    // sensor information request start ----
-    for (int i = 0; i <= Number_of_RS485_Requests; i++) {     // transmit the requests, assembling the Values array
-        Send_Request(i);                                            // send the RS485 Port the requests, one by one
-        Receive(i);                                                                    // receive the sensor output
-    }                                                                         // all values should now be populated
-// sensor information request end ------
-    Update_Current_Timeinfo();
-    Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
-    Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
-    Write_New_Data_Record_to_Data_File();                                       // write the new record to SD Drive
-    Add_New_Data_Record_to_Display_Table();                                  // add the record to the display table
-}// end of if millis >5000
+}
 void Check_NewDay() {
     Update_Current_Timeinfo();                                                      // update the Today_Date and Time
     if ((New_Date_Time_Data.field.Day != Current_Date_Time_Data.field.Day)) {       // is the day different to previous day
@@ -967,7 +983,7 @@ void Month_End_Process() {
                 // ConcatenationFile.println();                                                    // end of record
                 Concatenation_Data_Record_Count++;                            // increment the running record total
                 if (millis() > Last_Cycle + (unsigned long)5000) {                 // send requests every 5 seconds
-                    Get_Sensor_Data();
+                    Get_Variable_Data();
                     server.handleClient();                                  // handle any messages from the website
                 }
                 Month_End_Records_Processed++;
@@ -993,21 +1009,27 @@ void Month_End_Process() {
     Send_WhatsApp_Message("Power Monitor - Month End Process Complete, " + ConcatenationFileName + " Now available for download");
 }
 void Send_WhatsApp_Message(String message) {
-    String WhatsApp_url = "https://api.callmebot.com/whatsapp.php?phone=447785938200&apikey=8876034&text=" + urlEncode(message);
+    // https://api.callmebot.com/whatsapp.php?source=web
+    // &phone=+447785938200
+    // &apikey=8876034&text=
+    String This_WhatsApp_url = "https://api.callmebot.com/whatsapp.php";
+    This_WhatsApp_url += "?phone=+447785938200";                                        // telephone number
+    This_WhatsApp_url += "&apikey=8876034";                                     // app key
+    This_WhatsApp_url += "&text=";
+    This_WhatsApp_url += urlEncode(message);                                    // message
     HTTPClient http;
-    http.begin(WhatsApp_url);
+    http.begin(This_WhatsApp_url);
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");    // Specify content-type header
-    int httpResponseCode = http.POST(WhatsApp_url);      // Send HTTP POST request
+    int httpResponseCode = http.POST(This_WhatsApp_url);      // Send HTTP POST request
     if (httpResponseCode == 200) {
-        console_print("WhatsApp Message " + message + " sent successfully");
+        console_print("WhatsApp Message " + message + " sent successfully at " + Current_Time_With);
     }
     else {
-        console_print("Error sending the WhatsApp message" + message);
-        console_print("WhatsApp HTTP response code: " + httpResponseCode);
+        console_print("Error sending the WhatsApp message: " + message + " Response Code:" + String(httpResponseCode));
     }
     http.end();
 }
-void Write_New_Data_Record_to_Data_File() {
+void Write_New_Data_Record_to_Data_Files() {
     digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                              // flash the SD activity LED on
     DataFile = SD.open("/" + DataFileName, FILE_APPEND);                                // open the SD file
     if (!DataFile) {                                                                    // oops - file not available!
@@ -1164,10 +1186,10 @@ void Check_WiFi() {
             console_print("Network Error, WiFi lost >20 seconds, Restarting Processor");
             ESP.restart();
         }
-        StartWiFi(ssid, password);
+        StartWiFi(SSID, Password);
     }
 }
-int StartWiFi(const char* ssid, const char* password) {
+int StartWiFi(String ssid, String password) {
     console_print("WiFi Connecting to " + String(ssid));
     if (WiFi.status() == WL_CONNECTED) {                                // disconnect to start new wifi connection
         console_print("WiFi Already Connected");
@@ -1175,7 +1197,7 @@ int StartWiFi(const char* ssid, const char* password) {
         WiFi.disconnect(true);
         console_print("Disconnected");
     }
-    WiFi.begin(ssid, password);                                                     // connect to the wifi network
+    WiFi.begin(SSID, Password);                                                     // connect to the wifi network
     int WiFi_Status = WiFi.status();
     console_print("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     int wifi_connection_attempts = 0;                                                  // zero the attempt counter
@@ -1196,7 +1218,7 @@ int StartWiFi(const char* ssid, const char* password) {
 }
 void initTime(String timezone) {
     console_print("Starting Time Server");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    configTime(gmtOffset_sec, daylightOffset_sec, NtpServer);
     setenv("TZ", timezone.c_str(), 1);                                        // adjust time settings to London
     tzset();
     console_print("Time Server Started");
@@ -1208,7 +1230,7 @@ void Prefill_Data_Array() {
     char data_temp;
     String message;
     digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                          // flash the blue led
-    console_print("Loading DataFile from " + String(DataFileName));
+    console_print("Pre Loading DataFile " + String(DataFileName) + " into Data Array");
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
     if (DataFile) {
         while (DataFile.available()) {                                 // throw the first row, column headers, away
@@ -1474,13 +1496,7 @@ void Prefill_Data_Array() {
     console_print("Loaded Data Records: " + String(Data_Record_Count));
 }
 void Shuffle_Data_Table() {
-#ifdef PRiNT_SHUFFLiNG_DATA_VALUES
-    console_print("Shuffling Data Table");
-#endif
     for (int i = 0; i < (Data_Table_Size - 1); i++) {       // shuffle the rows up, losing row 0, make row [table_size] free
-#ifdef PRiNT_SHUFFLiNG_DATA_VALUES
-        console_print("Shuffling Data Record "); console.print(i + 1); console.print(" to "); console.println((i));
-#endif
         strncpy(Readings_Table[i].field.ldate, Readings_Table[i + 1].field.ldate, sizeof(Readings_Table[i].field.ldate));                       // [0]  date
         strncpy(Readings_Table[i].field.ltime, Readings_Table[i + 1].field.ltime, sizeof(Readings_Table[i].field.ltime));                       // [1]  time
         Readings_Table[i].field.Voltage = Readings_Table[i + 1].field.Voltage;                          // Voltage
@@ -1535,7 +1551,7 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     }
 }
 void Page_Header(bool refresh, String Header) {
-    webpage.reserve(5000);
+    webpage.reserve(6000);
     webpage = "";
     webpage = "<!DOCTYPE html><head>";
     webpage += F("<html lang='en'>");                                                              // start of HTML section
@@ -1681,14 +1697,25 @@ void i_Display() {
     lastcall = "display";
 }
 void i_WhatsApp() {
-    Send_WhatsApp_Message("Power Monitor - Test Message from Webpage, ");
+    console_print("WhatsApp Test Message Requested via Webpage");
+    Page_Header(false, "Sending Test WhatsApp  Message" + String(Current_Date_With) + " " + String(Current_Time_With));
+    if (millis() > (WhatsApp_Time + 1000)) {
+        WhatsApp_Time = millis();
+        Send_WhatsApp_Message("Power Monitor - Sending Test Message from Webpage at " + String(Current_Time_With));
+    }
+    Page_Footer();
 }
 void i_Web_Reset() {
     console_print("Web Reset of Processor Requested via Webpage");
+    Page_Header(false, "Resetting Processor at " + String(Current_Date_With) + " " + String(Current_Time_With));
+    if (millis() > (Reset_Time + 1000)) {
+        Reset_Time = millis();
+        Send_WhatsApp_Message("Power Monitor - Resetting Processor from Webpage at " + String(Current_Time_With));
+    }
+    Page_Footer();
     ESP.restart();
 }
 void i_Information() {                                                    // Display file size of the datalog file
-    int file_count = Count_Files_on_SD_Drive();
     console_print("Web Display of information Requested via Webpage");
     String ht = String(Date_of_Highest_Voltage + " at " + Time_of_Highest_Voltage + " as ");
     ht += String(Highest_Voltage) + " volts";
@@ -1696,16 +1723,17 @@ void i_Information() {                                                    // Dis
     lt += String(Lowest_Voltage) + " volts";
     String ha = String(Date_of_Highest_Amperage + " at " + Time_of_Highest_Amperage + " as ");
     ha += String(Highest_Amperage) + " amps";
+    File DataFile = SD.open("/" + DataFileName, FILE_READ);                // Now read data from FS
+    webpage = "";
     Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
-    File DataFile = SD.open("/" + DataFileName, FILE_READ);                               // Now read data from FS
-    // 1.Wifi Signal Strength --------------
+    // 1.Wifi Signal Strength ---------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true;font-size:14px; '");
     webpage += F(">WiFi Signal Strength = ");
     webpage += String(WiFi_Signal_Strength) + " Dbm";
     webpage += "</span></strong></p>";
-    // Row 2.Data File Size -----
+    // Row 2.Data File Size -----------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
@@ -1713,7 +1741,7 @@ void i_Information() {                                                    // Dis
     webpage += String(DataFile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
-    // Row 3.Freespace ----------
+    // Row 3.Freespace ----------------------------------------------------------------------------
     if (SD_freespace < Critical_SD_Freespace) {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
@@ -1732,21 +1760,22 @@ void i_Information() {                                                    // Dis
         webpage += F(" MB");
         webpage += "</span></strong></p>";
     }
-    // Row 4.File Count ---------
+    // Row 4.File Count ---------------------------------------------------------------------------
+    int file_count = Count_Files_on_SD_Drive();
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
     webpage += F("'> Number of Files on SD : ");
     webpage += String(file_count);
     webpage += "</span></strong></p>";
-    // Row 5.Last Boot Time -----
+    // Row 5.Last Boot Time -----------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Date the System was Booted : ");
     webpage += Last_Boot_Date_With + " at " + Last_Boot_Time_With;
     webpage += "</span></strong></p>";
-    // Row 6.Data Record Count --
+    // Row 6.Data Record Count --------------------------------------------------------------------
     double Percentage = (Data_Record_Count * (double)100) / (double)17280;
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
@@ -1870,7 +1899,7 @@ void i_Information() {                                                    // Dis
     }
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Row 19.Month ENd CUrrent File being Processed
+    // Row 19.Month End CUrrent File being Processed
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
@@ -1915,6 +1944,7 @@ void i_Information() {                                                    // Dis
     webpage += F("<</h3>");
     DataFile.close();
     Page_Footer();
+    lastcall = "display";
 }
 void i_Download_Files() {
     int file_count = Count_Files_on_SD_Drive();             // this counts and creates an array of file names on SD
@@ -2005,24 +2035,6 @@ void i_Del_File() {                                                             
     }
     Page_Footer();
 }
-void i_Wipe_Files() {                                                // selected by pressing combonation of buttons
-    console_print("Start of Wipe Files Request by Switch");
-    String filename;
-    File root = SD.open("/");                                                          //  Open the root directory
-    while (true) {
-        File entry = root.openNextFile();                                                    //  get the next file
-        if (entry) {
-            filename = entry.name();
-            console_print("Removing " + filename);
-            SD.remove(entry.name());                                                           //  delete the file
-        }
-        else {
-            root.close();
-            console_print("All files removed from root directory, rebooting");
-            ESP.restart();
-        }
-    }
-}
 int Count_Files_on_SD_Drive() {
     int file_count = 0;
     bool files_present = false;
@@ -2041,7 +2053,6 @@ int Count_Files_on_SD_Drive() {
                 }
             }
             DataFile.close(); // close the file:
-            webpage = "";
         }
         else {
             root.close();
@@ -2397,6 +2408,7 @@ void Parse_Weather_info(String payload) {
     "country":"GB","sunrise":1672819699,"sunset":1672848573},
     "timezone":0,"id":2656192,"name":"Basingstoke","cod":200}
     */
+
     int start = 0;
     int end = 0;
     // Temperature ----------
