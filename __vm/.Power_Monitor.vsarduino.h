@@ -15,6 +15,7 @@
 #define _VSARDUINO_H_
 #define __ESP32_esp32__ 1
 #define __ESP32_ESP32__ 1
+#define _VMDEBUG 1
 #define HAVE_CONFIG_H 1
 #define MBEDTLS_CONFIG_FILE "mbedtls/esp_config.h"
 #define UNITY_INCLUDE_CONFIG_H 1
