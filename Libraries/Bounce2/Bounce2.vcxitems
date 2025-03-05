@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding ="utf-8" ?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" >
+  <PropertyGroup Label="Globals" >
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{f3e6947e-1bdc-4b2c-884e-bbcf3269eb2b}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)Bounce2.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\Bounce2.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)Bounce2.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\Bounce2.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="$(MSBuildThisFileDirectory)INSTALL.txt" />
+<Text Include="$(MSBuildThisFileDirectory)keywords.txt" />
+<Text Include="$(MSBuildThisFileDirectory)library.properties" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)Bounce1.zip" />
+<None Include="$(MSBuildThisFileDirectory)BouncySwitch_lockout.png" />
+<None Include="$(MSBuildThisFileDirectory)BouncySwitch_stable.png" />
+<None Include="$(MSBuildThisFileDirectory)component.mk" />
+<None Include="$(MSBuildThisFileDirectory)Doxyfile" />
+<None Include="$(MSBuildThisFileDirectory)library.json" />
+<None Include="$(MSBuildThisFileDirectory)LICENSE" />
+<None Include="$(MSBuildThisFileDirectory)README.md" />
+  </ItemGroup>
+</Project>
