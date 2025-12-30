@@ -63,6 +63,7 @@ Change Record
 30/12/2025  12.34 File write verification added (Issue #22) - All SD card write operations now verified to detect silent failures and ensure data integrity
 30/12/2025  12.35 Date/time validation added (Issue #23) - NTP time data validated for reasonable ranges before use, prevents invalid timestamps in data
 30/12/2025  12.36 Circular log buffer implemented (Issues #24, #26, #27) - 500-entry circular buffer logs to SD, system health monitoring, version info logged at startup
+30/12/2025  12.37 Configuration file system (Issue #25) - Runtime configuration via config.json on SD card, no recompile needed for WiFi, intervals, features
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -82,7 +83,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.36";
+String version = "V12.37";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -140,6 +141,9 @@ const int MAX_WIFI_RETRY_ATTEMPTS = 20;                 // Maximum WiFi connecti
 const int LOG_BUFFER_SIZE = 500;                     // Maximum log entries in circular buffer (reduced for RAM)
 const String LOG_FILENAME = "/system.log";           // System log file on SD card
 const unsigned long HEALTH_CHECK_INTERVAL_MS = 60000; // Check system health every minute
+
+// Configuration File (Issue #25)
+const String CONFIG_FILENAME = "/config.json";       // Configuration file on SD card
 
 // includes --
 #include <vfs_api.h>
@@ -285,13 +289,30 @@ int log_buffer_index = 0;
 int log_buffer_count = 0;
 unsigned long last_health_check = 0;
 
+// Runtime Configuration (Issue #25 - Configuration File)
+struct RuntimeConfig {
+    String wifi_ssid = "Woodleigh";
+    String wifi_password = "2008198399";
+    String ntp_server = "pool.ntp.org";
+    String weather_city = "Basingstoke";
+    String weather_region = "uk";
+    bool weather_enabled = true;
+    bool whatsapp_enabled = true;
+    int debug_level = 2;  // 0=none, 1=errors, 2=info, 3=verbose
+    unsigned long main_cycle_ms = 5000;
+    unsigned long weather_update_ms = 600000;
+    unsigned long health_check_ms = 60000;
+};
+RuntimeConfig config;
+
 //constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
 const char* host = "esp32";
-const char* SSID = "Woodleigh";
-const char* Password = "2008198399";
-const char* NtpServer = "pool.ntp.org";
-const char Weather_City[] = { "Basingstoke\0" };
-const char Weather_Region[] = { "uk\0" };
+// WiFi credentials now loaded from config.json (Issue #25)
+const char* SSID = "Woodleigh";  // Fallback if config not loaded
+const char* Password = "2008198399";  // Fallback if config not loaded
+const char* NtpServer = "pool.ntp.org";  // Fallback if config not loaded
+const char Weather_City[] = { "Basingstoke\0" };  // Fallback if config not loaded
+const char Weather_Region[] = { "uk\0" };  // Fallback if config not loaded
 bool Weather_Enabled = true;
 bool WhatsApp_Enabled = true;
 //bool WhatsApp_Debug = true;
@@ -910,6 +931,17 @@ void setup() {
             DEBUG_INFO("SD Card initialisation Complete");
         }
         DEBUG_INFO("SD Configuration Complete");
+        
+        // Load configuration from SD card (Issue #25)
+        load_config_from_sd();
+        
+        // Apply configuration to runtime variables
+        SSID = config.wifi_ssid.c_str();
+        Password = config.wifi_password.c_str();
+        NtpServer = config.ntp_server.c_str();
+        Weather_Enabled = config.weather_enabled;
+        WhatsApp_Enabled = config.whatsapp_enabled;
+        
         console_print("Date and Time Update");
         Update_Current_Timeinfo();                                              // update This date time info, no /s
         console_print("Setting Previous Date and Time to Today Date and Time");
@@ -979,13 +1011,13 @@ void loop() {
     Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
     Check_NewDay();                                                 // check if the date has changed
     server.handleClient();                                          // handle any messages from the website
-    if (millis() > Last_Cycle + MAIN_CYCLE_INTERVAL_MS) {              // send requests every 5 seconds
+    if (millis() > Last_Cycle + config.main_cycle_ms) {            // configurable main cycle interval
         Get_Variable_Data();
     }
     Check_SD_Space();
     
     // Periodic system health logging and log file update (Issue #26)
-    if (millis() - last_health_check >= HEALTH_CHECK_INTERVAL_MS) {
+    if (millis() - last_health_check >= config.health_check_ms) {  // configurable health check interval
         last_health_check = millis();
         log_system_health();
         write_log_to_sd();  // Write circular buffer to SD card
@@ -997,7 +1029,7 @@ void Get_Variable_Data() {
     
     // Only fetch weather data every 10 minutes (not every cycle)
     bool weather_ok = true;
-    if (millis() - Last_Weather_Read > WEATHER_UPDATE_INTERVAL_MS) {
+    if (millis() - Last_Weather_Read > config.weather_update_ms) {  // configurable weather interval
         weather_ok = Get_Weather();
         if (weather_ok) {
             Last_Weather_Read = millis();
@@ -1138,6 +1170,119 @@ void log_system_health() {
                        " Min=" + String(min_free_heap) + 
                        " (" + String(heap_percent) + "%)";
     console_print(health_msg);
+}
+
+// Configuration file management (Issue #25)
+void create_default_config() {
+    console_print("Creating default configuration file");
+    
+    File configFile = SD.open(CONFIG_FILENAME, FILE_WRITE);
+    if (!configFile) {
+        console_print("ERROR: Failed to create config file");
+        return;
+    }
+    
+    // Write default JSON configuration
+    configFile.println("{");
+    configFile.println("  \"wifi_ssid\": \"Woodleigh\",");
+    configFile.println("  \"wifi_password\": \"2008198399\",");
+    configFile.println("  \"ntp_server\": \"pool.ntp.org\",");
+    configFile.println("  \"weather_city\": \"Basingstoke\",");
+    configFile.println("  \"weather_region\": \"uk\",");
+    configFile.println("  \"weather_enabled\": true,");
+    configFile.println("  \"whatsapp_enabled\": true,");
+    configFile.println("  \"debug_level\": 2,");
+    configFile.println("  \"main_cycle_ms\": 5000,");
+    configFile.println("  \"weather_update_ms\": 600000,");
+    configFile.println("  \"health_check_ms\": 60000");
+    configFile.println("}");
+    
+    configFile.close();
+    console_print("Default configuration file created");
+}
+
+bool load_config_from_sd() {
+    if (!SD.exists(CONFIG_FILENAME)) {
+        console_print("Config file not found, creating default");
+        create_default_config();
+        return false;
+    }
+    
+    File configFile = SD.open(CONFIG_FILENAME, FILE_READ);
+    if (!configFile) {
+        console_print("ERROR: Failed to open config file");
+        return false;
+    }
+    
+    console_print("Loading configuration from SD card");
+    
+    // Parse JSON manually (simple parser for our specific format)
+    String line;
+    while (configFile.available()) {
+        line = configFile.readStringUntil('\n');
+        line.trim();
+        
+        if (line.indexOf("wifi_ssid") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.wifi_ssid = line.substring(start, end);
+        }
+        else if (line.indexOf("wifi_password") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.wifi_password = line.substring(start, end);
+        }
+        else if (line.indexOf("ntp_server") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.ntp_server = line.substring(start, end);
+        }
+        else if (line.indexOf("weather_city") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.weather_city = line.substring(start, end);
+        }
+        else if (line.indexOf("weather_region") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.weather_region = line.substring(start, end);
+        }
+        else if (line.indexOf("weather_enabled") >= 0) {
+            config.weather_enabled = (line.indexOf("true") >= 0);
+        }
+        else if (line.indexOf("whatsapp_enabled") >= 0) {
+            config.whatsapp_enabled = (line.indexOf("true") >= 0);
+        }
+        else if (line.indexOf("debug_level") >= 0) {
+            int start = line.indexOf(":") + 1;
+            config.debug_level = line.substring(start).toInt();
+        }
+        else if (line.indexOf("main_cycle_ms") >= 0) {
+            int start = line.indexOf(":") + 1;
+            config.main_cycle_ms = line.substring(start).toInt();
+        }
+        else if (line.indexOf("weather_update_ms") >= 0) {
+            int start = line.indexOf(":") + 1;
+            config.weather_update_ms = line.substring(start).toInt();
+        }
+        else if (line.indexOf("health_check_ms") >= 0) {
+            int start = line.indexOf(":") + 1;
+            config.health_check_ms = line.substring(start).toInt();
+        }
+    }
+    
+    configFile.close();
+    
+    console_print("Configuration loaded:");
+    console_print("  WiFi SSID: " + config.wifi_ssid);
+    console_print("  NTP Server: " + config.ntp_server);
+    console_print("  Weather: " + config.weather_city + ", " + config.weather_region);
+    console_print("  Weather Enabled: " + String(config.weather_enabled ? "Yes" : "No"));
+    console_print("  WhatsApp Enabled: " + String(config.whatsapp_enabled ? "Yes" : "No"));
+    console_print("  Debug Level: " + String(config.debug_level));
+    console_print("  Main Cycle: " + String(config.main_cycle_ms) + "ms");
+    
+    return true;
 }
 
 void Month_End_Process() {

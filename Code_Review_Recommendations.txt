@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.36
-File: Power_Monitor.ino (2908 lines)
+Current Version: V12.37
+File: Power_Monitor.ino (3126 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -683,8 +683,55 @@ ADDITIONAL RECOMMENDATIONS
     Note: DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros implemented in Issue #18
           provide compile-time severity levels
 
-25. Implement Configuration File
+25. Implement Configuration File - FIXED (V12.37)
     Create config.json on SD card for runtime configuration without recompile
+    
+    RESOLUTION:
+    - Created RuntimeConfig structure to hold configuration parameters
+    - Implemented JSON configuration file at /config.json on SD card
+    - Configurable parameters:
+      * WiFi credentials (SSID, password)
+      * NTP server address
+      * Weather location (city, region)
+      * Feature enables (weather, WhatsApp)
+      * Debug level (0-3)
+      * Timing intervals (main cycle, weather update, health check)
+    
+    - Automatic default config creation if file missing
+    - Manual JSON parser (no library dependency)
+    - Configuration loaded during setup after SD initialization
+    - Configuration applied to runtime variables
+    - All settings logged to console on load
+    
+    - Configuration structure:
+      ```json
+      {
+        "wifi_ssid": "Woodleigh",
+        "wifi_password": "********",
+        "ntp_server": "pool.ntp.org",
+        "weather_city": "Basingstoke",
+        "weather_region": "uk",
+        "weather_enabled": true,
+        "whatsapp_enabled": true,
+        "debug_level": 2,
+        "main_cycle_ms": 5000,
+        "weather_update_ms": 600000,
+        "health_check_ms": 60000
+      }
+      ```
+    
+    Benefits:
+    - No recompile needed to change WiFi credentials
+    - Easy to adjust timing intervals for different scenarios
+    - Can enable/disable features without code changes
+    - Portable configuration across multiple devices
+    - Easy backup and restore of settings
+    - User-editable with any text editor
+    
+    Usage:
+    - Edit /config.json on SD card
+    - Reboot system to apply changes
+    - Check console log to verify settings loaded
 
 26. Add System Health Monitoring - FIXED (V12.36)
     Track and log:
