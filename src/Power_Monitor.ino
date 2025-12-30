@@ -66,6 +66,7 @@ Change Record
 30/12/2025  12.37 Configuration file system (Issue #25) - Runtime configuration via config.json on SD card, no recompile needed for WiFi, intervals, features
 30/12/2025  1.0.0 Semantic versioning adopted (Issue #27) - MAJOR.MINOR.PATCH format for clear version communication, helper function for formatted version display
 30/12/2025  1.0.1 Comprehensive function documentation (Issue #28) - Added professional Doxygen-style comments to all major functions: purpose, parameters, return values, side effects
+30/12/2025  1.0.2 Critical bug fix - Monthly file consolidation header corrected to match actual CSV format (20 columns instead of 8), preventing data corruption
 
 SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 - MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
@@ -125,8 +126,8 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
 #define VERSION_MINOR 0   // Backwards-compatible functionality additions
-#define VERSION_PATCH 1   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.0.1"
+#define VERSION_PATCH 2   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.0.2"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -1688,8 +1689,12 @@ bool ZipAllFilesToSD(const char* zipFilename) {
         return false;
     }
     
-    // Write header (same as daily file header)
-    monthlyFile.println("Date,Time,kWH,Watts,Gas Counter,Temperature,Humidity,Pressure");
+    // Write header (same as daily file header) - FIXED: Use actual column names
+    for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {
+        monthlyFile.print(Column_Field_Names[x]);
+        monthlyFile.print(",");
+    }
+    monthlyFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
     
     // Get the month we're consolidating (previous month)
     String targetMonth = String(Month_End_Date_Time_Data.field.Month);
