@@ -57,6 +57,7 @@ Change Record
 30/12/2025  12.28 Code duplication eliminated (Issue #16) - Created toggleLED() helper function, replaced 4 instances of digitalWrite(pin, !digitalRead(pin))
 30/12/2025  12.29 Header guards added (Issue #17) - Added traditional #ifndef/#define/#endif guards to Configuration.h and KWS_Protocol.h for maximum portability
 30/12/2025  12.30 Debug output standardized (Issue #18) - Implemented DEBUG_LEVEL system with DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros for consistent debug control
+30/12/2025  12.31 Blocking delays eliminated (Issue #19) - Replaced blocking delay() calls with non-blocking patterns to maintain system responsiveness
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -76,7 +77,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.30";
+String version = "V12.31";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -686,6 +687,29 @@ void toggleLED(int pin) {
     digitalWrite(pin, !digitalRead(pin));
 }
 
+// Non-blocking delay helper (Issue #19 - Blocking Delays)
+// Returns true if the specified interval has elapsed since lastTime
+// Updates lastTime when interval elapses
+bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastTime >= interval) {
+        lastTime = currentTime;
+        return true;
+    }
+    return false;
+}
+
+// Smart delay that keeps watchdog fed and server responsive (Issue #19 - Blocking Delays)
+// Use this instead of delay() when system must remain responsive
+void smartDelay(unsigned long ms) {
+    unsigned long start = millis();
+    while (millis() - start < ms) {
+        timerWrite(Timer0_Cfg, 0);  // Feed watchdog
+        server.handleClient();       // Handle web requests
+        yield();                     // Allow ESP32 background tasks
+    }
+}
+
 void setup() {
     console.begin(console_Baudrate);                                        // enable the console
     while (!console);                                                       // wait for port to settle
@@ -1201,13 +1225,13 @@ void Write_New_Data_Record_to_Data_Files() {
         }
         DEBUG_ERROR("Error re-opening DataFile:" + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
         if (retry < SD_RETRY_ATTEMPTS) {
-            delay(1000);  // Wait 1 second before retry
+            smartDelay(1000);  // Wait 1 second before retry (keeps system responsive)
         }
     }
     if (!file_opened) {
         DEBUG_ERROR("Error re-opening DataFile:" + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
         Send_WhatsApp_Message("Power Monitor - Error re-opening DataFile: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
-        delay(5000);
+        smartDelay(5000);
         ESP.restart();
     }
     console_print("New Data Record Written to " + DataFileName);
@@ -1327,13 +1351,13 @@ void Create_or_Open_New_Data_File() {
             }
             DEBUG_ERROR("Error creating Data file: " + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
             if (retry < SD_RETRY_ATTEMPTS) {
-                delay(1000);  // Wait 1 second before retry
+                smartDelay(1000);  // Wait 1 second before retry (keeps system responsive)
             }
         }
         if (!file_created) {
             DEBUG_ERROR("Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
-            delay(5000);
+            smartDelay(5000);
             ESP.restart();
         }
         console_print("Day Data File " + DataFileName + " created");
@@ -1358,13 +1382,13 @@ void Create_or_Open_New_Data_File() {
             }
             console_print("Error opening Data file: " + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
             if (retry < SD_RETRY_ATTEMPTS) {
-                delay(1000);  // Wait 1 second before retry
+                smartDelay(1000);  // Wait 1 second before retry (keeps system responsive)
             }
         }
         if (!file_reopened) {
             console_print("Error reopening Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - Error reopening Data File " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
-            delay(5000);
+            smartDelay(5000);
             ESP.restart();
         }
         console_print("Day Data File " + DataFileName + " reopened for append");
@@ -1377,16 +1401,25 @@ void Create_or_Open_New_Data_File() {
     This_Day = Current_Date_Time_Data.field.Day;
 }
 void Check_WiFi() {
-    int wifi_connection_attempts = 0;
-    while (WiFi.status() != WL_CONNECTED) {                              // whilst it is not connected keep trying
-        console_print("WiFi Connection Failed, Attempting to Reconnect");
-        delay(3000);                                                             // wait 3 seconds before retrying
-        console_print("Connection attempt " + String(wifi_connection_attempts));
-        if (wifi_connection_attempts++ > 20) {
-            console_print("Network Error, WiFi lost >20 seconds, Restarting Processor");
-            ESP.restart();
+    static int wifi_connection_attempts = 0;
+    static unsigned long lastWiFiCheck = 0;
+    
+    // Non-blocking WiFi check with 3-second retry interval (Issue #19 - Blocking Delays)
+    if (WiFi.status() != WL_CONNECTED) {
+        if (millis() - lastWiFiCheck >= 3000) {
+            console_print("WiFi Connection Failed, Attempting to Reconnect");
+            console_print("Connection attempt " + String(wifi_connection_attempts));
+            lastWiFiCheck = millis();
+            
+            if (wifi_connection_attempts++ > 20) {
+                console_print("Network Error, WiFi lost >20 seconds, Restarting Processor");
+                ESP.restart();
+            }
+            StartWiFi(SSID, Password);
         }
-        StartWiFi(SSID, Password);
+    } else {
+        // Reset counter when connected
+        wifi_connection_attempts = 0;
     }
 }
 int StartWiFi(String ssid, String password) {
@@ -2211,7 +2244,7 @@ bool Receive(int field) {
             if (millis() > start_time + (unsigned long)500) {         // no data received within 500 ms so timeout
                 console_print("No Reply from RS485 within 500 ms - Rebooting");
                 Send_WhatsApp_Message("Power Monitor - No Reply from RS485 within 500ms - Automatic Reboot");
-                delay(1000);  // Allow time for message to be sent
+                smartDelay(1000);  // Allow time for message to be sent (keeps system responsive)
                 ESP.restart();  // Automatically reboot instead of waiting for switch press
             }
         }
@@ -2400,7 +2433,7 @@ void Check_Red_Switch(String message) {
     // Now automatically reboots after error notification
     console_print("Fatal Error: " + message + " - Automatic reboot in 5 seconds");
     Send_WhatsApp_Message("Power Monitor - Fatal Error Detected - " + message + " - Automatic Reboot");
-    delay(5000);  // Allow time for message to be sent
+    smartDelay(5000);  // Allow time for message to be sent (keeps system responsive)
     ESP.restart();
 }
 void Check_Yellow_Switch() {
@@ -2430,18 +2463,27 @@ void SetTimeZone(String timezone) {
     tzset();
 }
 void Update_Current_Timeinfo() {
-    int connection_attempts = 0;
-    String temp;
-    while (!getLocalTime(&timeinfo)) {                                      // get date and time from ntpserver
-        console_print("Attempting to Get Date " + String(connection_attempts));
-        delay(500);
-        connection_attempts++;
-        if (connection_attempts > 20) {
-            console_print("Time Network Error, Restarting");
-            Send_WhatsApp_Message("Power Monitor - Time Network Error, Restarting");
-            ESP.restart();
+    static int connection_attempts = 0;
+    static unsigned long lastAttemptTime = 0;
+    
+    // Non-blocking retry with 500ms interval (Issue #19 - Blocking Delays)
+    if (!getLocalTime(&timeinfo)) {
+        if (millis() - lastAttemptTime >= 500) {
+            console_print("Attempting to Get Date " + String(connection_attempts));
+            lastAttemptTime = millis();
+            connection_attempts++;
+            if (connection_attempts > 20) {
+                console_print("Time Network Error, Restarting");
+                Send_WhatsApp_Message("Power Monitor - Time Network Error, Restarting");
+                ESP.restart();
+            }
         }
+        return;  // Exit early, try again next call
     }
+    
+    // Success - reset counter for next time
+    connection_attempts = 0;
+    
     New_Date_Time_Data.field.Year = timeinfo.tm_year + 1900;
     New_Date_Time_Data.field.Month = timeinfo.tm_mon + 1;
     New_Date_Time_Data.field.Day = timeinfo.tm_mday;

@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.30
-File: Power_Monitor.ino (2614 lines)
+Current Version: V12.31
+File: Power_Monitor.ino (2656 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -440,24 +440,59 @@ CODE STRUCTURE
 PERFORMANCE
 ================================================================================
 
-19. Blocking Delays Throughout Code
+19. Blocking Delays Throughout Code - FIXED (V12.31)
     Locations: Lines 2044, 495, 681, 1841 and others
     Issue: delay() blocks entire system, preventing:
            - Web server responsiveness
            - Switch input detection
            - Watchdog timer feeding
     
-    Recommendation: Replace with non-blocking patterns:
-                    unsigned long lastAction = 0;
-                    const unsigned long ACTION_INTERVAL = 500;
-                    
-                    void loop() {
-                        if (millis() - lastAction >= ACTION_INTERVAL) {
-                            lastAction = millis();
-                            // Do action
-                        }
-                        // Other code continues running
-                    }
+    RESOLUTION:
+    - Added nonBlockingDelay() helper function:
+      * Uses millis() to track elapsed time
+      * Returns true when interval elapsed
+      * Allows other code to continue running
+    
+    - Added smartDelay() helper function:
+      * Replacement for delay() in error paths
+      * Feeds watchdog timer during wait
+      * Handles web server requests during wait
+      * Calls yield() for ESP32 background tasks
+    
+    - Converted Update_Current_Timeinfo() to non-blocking:
+      * Changed while() loop to early return pattern
+      * Uses static variables to maintain state
+      * Tries again on next function call
+      * System remains responsive during NTP sync
+    
+    - Converted Check_WiFi() to non-blocking:
+      * Removed blocking while() loop
+      * Uses 3-second retry interval with millis()
+      * Static counter tracks reconnection attempts
+      * System continues operating during WiFi recovery
+    
+    - Replaced delay() in retry loops with smartDelay():
+      * SD card file operations (Write_New_Data_Record_to_Data_Files)
+      * File creation/opening (Create_or_Open_New_Data_File)
+      * Pre-reboot delays (RS485 timeout, fatal errors)
+      * Keeps watchdog fed and server responsive during retries
+    
+    - Kept blocking delays only where appropriate:
+      * setup() function delays (system not yet operational)
+      * RS485 2ms hardware timing delays (required for protocol)
+    
+    Results:
+    - Web interface remains responsive during errors
+    - Watchdog properly fed during retry operations
+    - Switch inputs detected even during WiFi reconnection
+    - System can handle multiple issues simultaneously
+    - Critical functions (NTP, WiFi) no longer block main loop
+    
+    Benefits:
+    - Improved user experience (responsive web UI)
+    - Better fault tolerance (parallel error handling)
+    - Reduced false watchdog resets
+    - More professional system behavior
 
 20. RS485 Communication Blocking
     Location: Lines 1820-1990 (Send_Request and Receive)
