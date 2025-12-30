@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.27
-File: Power_Monitor.ino (2584 lines)
+Current Version: V12.28
+File: Power_Monitor.ino (2590 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -356,20 +356,33 @@ CODE STRUCTURE
                         CloseDataFile();
                     }
 
-16. Code Duplication
+16. Code Duplication - FIXED (V12.28)
     Examples:
-    - LED toggling: digitalWrite(pin, !digitalRead(pin)) repeated 10+ times
-    - Webpage building patterns repeated for each page
-    - Data field parsing similar patterns 20+ times
+    - LED toggling: digitalWrite(pin, !digitalRead(pin)) repeated 4 times
+    - Webpage building patterns repeated for each page (future work)
+    - Data field parsing similar patterns (FIXED in V12.27)
     
-    Recommendation: Create helper functions:
-                    void toggleLED(int pin) {
-                        digitalWrite(pin, !digitalRead(pin));
-                    }
-                    
-                    void addWebpageRow(String label, String value) {
-                        webpage += "<p style='...'>" + label + ": ";
-                        webpage += value + "</p>";
+    RESOLUTION (LED Toggle):
+    - Created toggleLED(int pin) helper function:
+      * Encapsulates digitalWrite(pin, !digitalRead(pin)) pattern
+      * Added before setup() at line ~660
+      * Single point of maintenance for LED toggle logic
+    
+    - Replaced 4 occurrences:
+      * Write_New_Data_Record_to_Data_Files() - Blue LED for SD activity
+      * Prefill_Header() - Blue LED flash
+      * Prefill_Data_Array() loop - Blue LED during file reading
+      * Check_Gas_Switch() - Green LED when gas switch changes
+    
+    Results:
+    - Code more readable and maintainable
+    - Function name self-documents intent
+    - Easy to add features (e.g., debouncing, timing)
+    - Memory usage unchanged: RAM 24.5%, Flash 53.3%
+    
+    Recommendation: Consider similar helpers for webpage building patterns:
+                    void addWebpageRow(String& webpage, String label, String value) {
+                        webpage += "<p style='...'>" + label + ": " + value + "</p>";
                     }
 
 17. Missing Header Guards

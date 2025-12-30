@@ -54,6 +54,7 @@ Change Record
 30/12/2025  12.25 WhatsApp message deduplication - prevents identical messages within 5 minutes to avoid spam and rate limiting
 30/12/2025  12.26 Gas volume persistence - saves to EEPROM every 0.1m³ change, survives reboots with validation
 30/12/2025  12.27 Long function refactoring (Issue #15) - Prefill_Data_Array() reduced from 326 lines to ~90 lines by extracting CSV parsing into reusable helper functions
+30/12/2025  12.28 Code duplication eliminated (Issue #16) - Created toggleLED() helper function, replaced 4 instances of digitalWrite(pin, !digitalRead(pin))
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -73,7 +74,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.27";
+String version = "V12.28";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -655,6 +656,11 @@ double Load_Gas_Volume_From_EEPROM() {
     return volume;
 }
 
+// Helper function to toggle LED state (Issue #16 - Code Duplication)
+void toggleLED(int pin) {
+    digitalWrite(pin, !digitalRead(pin));
+}
+
 void setup() {
     console.begin(console_Baudrate);                                        // enable the console
     while (!console);                                                       // wait for port to settle
@@ -1160,7 +1166,7 @@ void Send_WhatsApp_Message(String message) {
     http.end();
 }
 void Write_New_Data_Record_to_Data_Files() {
-    digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                              // flash the SD activity LED on
+    toggleLED(Blue_led_pin);                              // flash the SD activity LED on
     bool file_opened = false;
     for (int retry = 1; retry <= SD_RETRY_ATTEMPTS; retry++) {
         DataFile = SD.open("/" + DataFileName, FILE_APPEND);
@@ -1490,7 +1496,7 @@ void Prefill_Data_Array() {
     int field_number = 0;
     char data_temp;
     String message;
-    digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                          // flash the blue led
+    toggleLED(Blue_led_pin);                          // flash the blue led
     console_print("Pre Loading DataFile " + String(DataFileName) + " into Data Array");
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
     if (DataFile) {
@@ -1499,7 +1505,7 @@ void Prefill_Data_Array() {
             if (data_temp == '\n') break;
         }
         while (DataFile.available()) {                                       // do while there are data available
-            digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));
+            toggleLED(Blue_led_pin);
             data_temp = DataFile.read();
             field[character_count++] = data_temp;                        // add it to the csvfield string
             if (data_temp == ',' || data_temp == '\n') {                              // look for end of field
@@ -2353,7 +2359,7 @@ void Check_Gas_Switch() {
         Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
         Latest_Gas_Date_With = Current_Date_With;
         Latest_Gas_Time_With = Current_Time_With;
-        digitalWrite(Green_led_pin, !digitalRead(Green_led_pin)); // flash the green light if Gas Switch changed
+        toggleLED(Green_led_pin); // flash the green light if Gas Switch changed
         
         // Save to EEPROM if changed by threshold amount (0.1m³)
         if (abs(Current_Data_Record.field.gas_volume - Last_Saved_Gas_Volume) >= GAS_VOLUME_SAVE_THRESHOLD) {
