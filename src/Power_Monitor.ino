@@ -58,6 +58,7 @@ Change Record
 30/12/2025  12.29 Header guards added (Issue #17) - Added traditional #ifndef/#define/#endif guards to Configuration.h and KWS_Protocol.h for maximum portability
 30/12/2025  12.30 Debug output standardized (Issue #18) - Implemented DEBUG_LEVEL system with DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros for consistent debug control
 30/12/2025  12.31 Blocking delays eliminated (Issue #19) - Replaced blocking delay() calls with non-blocking patterns to maintain system responsiveness
+30/12/2025  12.32 RS485 communication improved (Issue #20) - Added yield() to RS485 receive loop allowing WiFi stack and background tasks during sensor reads
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -77,7 +78,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.31";
+String version = "V12.32";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -2247,6 +2248,7 @@ bool Receive(int field) {
                 smartDelay(1000);  // Allow time for message to be sent (keeps system responsive)
                 ESP.restart();  // Automatically reboot instead of waiting for switch press
             }
+            yield();  // Allow WiFi stack and other background tasks to run (Issue #20)
         }
         value_status = true;                          // set the value status to true, which is true at this point
         while (RS485_Port.available()) {                                // Data is available so add them to Result

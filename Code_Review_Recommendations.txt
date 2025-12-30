@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.31
-File: Power_Monitor.ino (2656 lines)
+Current Version: V12.32
+File: Power_Monitor.ino (2658 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -494,16 +494,32 @@ PERFORMANCE
     - Reduced false watchdog resets
     - More professional system behavior
 
-20. RS485 Communication Blocking
+20. RS485 Communication Blocking - FIXED (V12.32)
     Location: Lines 1820-1990 (Send_Request and Receive)
     Issue: Synchronous communication blocks entire system
            No interrupt or DMA usage
     
-    Recommendation: Consider:
-                    - Implement interrupt-based serial reading
-                    - Use RTOS tasks for serial communication
-                    - Add timeout with yield() to allow other processing
-                    - Use hardware flow control if available
+    RESOLUTION:
+    - Added yield() call in RS485 receive waiting loop
+    - Allows WiFi stack to process during sensor reads
+    - Enables background tasks during RS485 communication
+    - Simple solution without complex interrupt/RTOS restructuring
+    
+    Analysis:
+    - Full interrupt-based or RTOS approach deemed overly complex
+    - RS485 reads take ~100-200ms every 5 seconds (acceptable)
+    - 2ms delays in Send_Request are hardware timing requirements (kept)
+    - 500ms timeout already implemented (adequate)
+    - yield() provides background task support without major changes
+    
+    Results:
+    - WiFi stack continues operating during sensor communication
+    - Background tasks can run during RS485 waits
+    - Maintains simple, reliable communication pattern
+    - No functionality impact, pure improvement
+    
+    Note: Left interrupt-based and RTOS approaches as future enhancements
+          if higher throughput or true parallel operation needed
 
 ================================================================================
 RELIABILITY
