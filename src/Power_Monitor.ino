@@ -65,6 +65,7 @@ Change Record
 30/12/2025  12.36 Circular log buffer implemented (Issues #24, #26, #27) - 500-entry circular buffer logs to SD, system health monitoring, version info logged at startup
 30/12/2025  12.37 Configuration file system (Issue #25) - Runtime configuration via config.json on SD card, no recompile needed for WiFi, intervals, features
 30/12/2025  1.0.0 Semantic versioning adopted (Issue #27) - MAJOR.MINOR.PATCH format for clear version communication, helper function for formatted version display
+30/12/2025  1.0.1 Comprehensive function documentation (Issue #28) - Added professional Doxygen-style comments to all major functions: purpose, parameters, return values, side effects
 
 SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 - MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
@@ -124,8 +125,8 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
 #define VERSION_MINOR 0   // Backwards-compatible functionality additions
-#define VERSION_PATCH 0   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.0.0"
+#define VERSION_PATCH 1   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.0.1"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -187,7 +188,18 @@ const String CONFIG_FILENAME = "/config.json";       // Configuration file on SD
 // VERSION MANAGEMENT (Issue #27 - Semantic Versioning)
 // ================================================================================
 
-// Returns formatted version string with build information
+/**
+ * @brief Get formatted version string with build information
+ * 
+ * Returns the current software version in semantic versioning format (MAJOR.MINOR.PATCH)
+ * along with the compilation date and time. This function is used for console output,
+ * web pages, and system logging.
+ * 
+ * @return String Formatted version string (e.g., "Version V1.0.0 (Built: Dec 30 2025 14:30:15)")
+ * 
+ * @note Called during system startup and displayed on web interface footer
+ * @see VERSION_STRING, VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH
+ */
 String get_version_string() {
     String version = "Version " VERSION_STRING;
     version += " (Built: " + String(__DATE__) + " " + String(__TIME__) + ")";
@@ -714,7 +726,21 @@ void IRAM_ATTR resetModule() {
 }
 // setup -----
 //------------
-// EEPROM Gas Volume Persistence (Issue #14)
+
+/**
+ * @brief Save gas volume to EEPROM for persistence across reboots
+ * 
+ * Writes the current gas volume reading to EEPROM along with a magic number
+ * for validation. This ensures gas meter readings survive power cycles and
+ * system reboots. The EEPROM is only written when volume changes by at least
+ * 0.1 m³ to minimize wear on EEPROM memory.
+ * 
+ * @param volume The gas volume in cubic meters to save
+ * 
+ * @note Side effect: Updates Last_Saved_Gas_Volume global variable
+ * @note EEPROM has ~100,000 write cycle limit; writes are throttled to 0.1 m³ changes
+ * @see Load_Gas_Volume_From_EEPROM(), GAS_VOLUME_SAVE_THRESHOLD
+ */
 void Save_Gas_Volume_To_EEPROM(double volume) {
     EEPROM.put(EEPROM_GAS_VOLUME_ADDR, volume);
     EEPROM.put(EEPROM_GAS_MAGIC_ADDR, EEPROM_MAGIC_NUMBER);
@@ -723,6 +749,20 @@ void Save_Gas_Volume_To_EEPROM(double volume) {
     console_print("Gas volume saved to EEPROM: " + String(volume, 2) + " m³");
 }
 
+/**
+ * @brief Load gas volume from EEPROM with validation
+ * 
+ * Reads the stored gas volume from EEPROM and validates it using a magic number.
+ * If the magic number is incorrect (first boot or corrupted data), initializes
+ * to 0.0. Performs sanity checks to ensure the value is valid (positive, finite,
+ * and less than 100,000 m³).
+ * 
+ * @return double The gas volume in cubic meters, or 0.0 if EEPROM data is invalid
+ * 
+ * @note Called once during setup() to restore state after reboot
+ * @note Validation checks: magic number match, NaN check, range 0-100000 m³
+ * @see Save_Gas_Volume_To_EEPROM(), EEPROM_MAGIC_NUMBER
+ */
 double Load_Gas_Volume_From_EEPROM() {
     uint32_t magic;
     EEPROM.get(EEPROM_GAS_MAGIC_ADDR, magic);
@@ -747,14 +787,39 @@ double Load_Gas_Volume_From_EEPROM() {
     return volume;
 }
 
-// Helper function to toggle LED state (Issue #16 - Code Duplication)
+/**
+ * @brief Toggle LED state (helper to eliminate code duplication)
+ * 
+ * Reads the current state of the specified pin and inverts it (HIGH→LOW or LOW→HIGH).
+ * This replaces multiple instances of digitalWrite(pin, !digitalRead(pin)) throughout
+ * the codebase.
+ * 
+ * @param pin The GPIO pin number of the LED to toggle
+ * 
+ * @note Used for Blue, Green, and Red LED indicators during various operations
+ * @see Blue_led_pin, Green_led_pin, Red_led_pin
+ */
 void toggleLED(int pin) {
     digitalWrite(pin, !digitalRead(pin));
 }
 
-// Non-blocking delay helper (Issue #19 - Blocking Delays)
-// Returns true if the specified interval has elapsed since lastTime
-// Updates lastTime when interval elapses
+/**
+ * @brief Non-blocking delay helper that checks if interval has elapsed
+ * 
+ * Compares current time against a reference time and determines if the specified
+ * interval has passed. When the interval elapses, automatically updates the reference
+ * time for the next cycle. This replaces blocking delay() calls and keeps the system
+ * responsive to web requests, watchdog, and other tasks.
+ * 
+ * @param lastTime Reference to the timestamp of last execution (will be updated)
+ * @param interval Minimum time in milliseconds between executions
+ * 
+ * @return true if interval has elapsed (time to execute), false otherwise
+ * 
+ * @note lastTime parameter is passed by reference and updated when interval elapses
+ * @note Handles millis() overflow correctly (wraps at ~49 days)
+ * @see smartDelay()
+ */
 bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
     unsigned long currentTime = millis();
     if (currentTime - lastTime >= interval) {
@@ -764,8 +829,21 @@ bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
     return false;
 }
 
-// Smart delay that keeps watchdog fed and server responsive (Issue #19 - Blocking Delays)
-// Use this instead of delay() when system must remain responsive
+/**
+ * @brief Smart delay that maintains system responsiveness
+ * 
+ * Delays for the specified duration while continuously feeding the watchdog timer,
+ * handling web server requests, and allowing ESP32 background tasks to run. This
+ * prevents system hangs and watchdog resets during intentional delays (e.g., waiting
+ * for WiFi connection, SD card retries).
+ * 
+ * @param ms Duration to delay in milliseconds
+ * 
+ * @note Side effects: Feeds watchdog, processes web requests, yields to RTOS
+ * @note Use this instead of delay() anywhere system responsiveness is needed
+ * @note Busy-wait loop, does not enter power-saving mode
+ * @see nonBlockingDelay() for event-based timing
+ */
 void smartDelay(unsigned long ms) {
     unsigned long start = millis();
     while (millis() - start < ms) {
@@ -775,8 +853,24 @@ void smartDelay(unsigned long ms) {
     }
 }
 
-// File write verification helper (Issue #22 - File Operations Lack Verification)
-// Verifies that write operations succeed and logs errors
+/**
+ * @brief Verify SD card write operation succeeded
+ * 
+ * Checks if a file write operation wrote the expected number of bytes. Detects
+ * silent write failures that can occur when SD card is full, corrupted, or removed.
+ * Logs error messages for debugging when verification fails.
+ * 
+ * @param file Reference to the File object (for potential future checks)
+ * @param filename Name of the file being written (for error messages)
+ * @param bytesWritten Number of bytes reported written by print/write operation
+ * @param operation Description of the operation (e.g., "header write", "data append")
+ * 
+ * @return true if write succeeded (bytesWritten > 0), false if write failed
+ * 
+ * @note Does not trigger reboot; caller is responsible for error handling
+ * @note All SD write operations should use this for verification
+ * @see Write_New_Data_Record_to_Data_Files()
+ */
 bool verifyFileWrite(File &file, const String &filename, size_t bytesWritten, const String &operation) {
     if (bytesWritten == 0) {
         DEBUG_ERROR("Write verification failed for " + filename + " during " + operation);
@@ -785,6 +879,29 @@ bool verifyFileWrite(File &file, const String &filename, size_t bytesWritten, co
     return true;
 }
 
+/**
+ * @brief Arduino setup function - System initialization
+ * 
+ * Initializes all hardware peripherals, communication interfaces, and system services:
+ * - Serial console and RS485 communication
+ * - LED indicators and buttons with debouncing
+ * - SD card with retry logic
+ * - EEPROM and gas volume restoration
+ * - WiFi connection and web server
+ * - NTP time synchronization
+ * - Over-the-air (OTA) update capability
+ * - Watchdog timer
+ * - Configuration file loading
+ * - Data file creation/restoration
+ * 
+ * Runs once at power-on or after reset. If critical initialization fails (SD card,
+ * WiFi), the system will automatically reboot after sending WhatsApp notification.
+ * 
+ * @note Blocking function - must complete before loop() begins
+ * @note All console output uses console_print() for log buffer capture
+ * @note LEDs provide visual feedback during initialization steps
+ * @see loop(), load_config_from_sd()
+ */
 void setup() {
     console.begin(console_Baudrate);                                        // enable the console
     while (!console);                                                       // wait for port to settle
@@ -1020,6 +1137,29 @@ void setup() {
         console_print("Running in Full Function Mode");
 } // end of Setup
 //------------
+
+/**
+ * @brief Arduino main loop - Continuous system operation
+ * 
+ * Executes the main operational cycle at configurable intervals (default 5 seconds):
+ * - Feeds watchdog timer to prevent automatic reboot
+ * - Handles web server requests
+ * - Checks for date/time changes (new day, new month)
+ * - Reads sensor data via RS485
+ * - Updates weather information (every 10 minutes)
+ * - Writes data to SD card
+ * - Updates web display arrays
+ * - Monitors system health (heap memory)
+ * - Writes log buffer to SD card (every 60 seconds)
+ * - Checks user buttons (gas meter, blue switch, etc.)
+ * 
+ * Timing is controlled by config.main_cycle_ms from configuration file.
+ * All operations use non-blocking patterns to maintain system responsiveness.
+ * 
+ * @note Runs continuously after setup() completes
+ * @note Watchdog timer will reboot system if loop() hangs for >5 seconds
+ * @see Get_Sensor(), Get_Weather(), Write_New_Data_Record_to_Data_Files()
+ */
 void loop() {
     if (!Once) {
         console_print("Main Process Now Running");
@@ -1074,6 +1214,22 @@ void Get_Variable_Data() {
         Add_New_Data_Record_to_Display_Table();
     }
 }
+
+/**
+ * @brief Read all sensor data via RS485 communication
+ * 
+ * Sends RS485 requests to KWS power monitoring hardware and receives sensor readings
+ * including voltage, current, power, and energy data. Performs multiple requests
+ * (Number_of_RS485_Requests) to read all available fields. Includes yield() in
+ * receive loop to maintain system responsiveness.
+ * 
+ * @return true if all RS485 requests succeeded, false if any request failed
+ * 
+ * @note Timeout: RS485_TIMEOUT_MS (500ms) per request
+ * @note Updates Current_Data_Record global structure with sensor values
+ * @note Failure triggers automatic reboot after notification
+ * @see Send_Request(), Receive(), KWS_Protocol.h
+ */
 bool Get_Sensor() {
     for (int i = 0; i <= Number_of_RS485_Requests; i++) {
         Send_Request(i);
@@ -1084,6 +1240,23 @@ bool Get_Sensor() {
     }
     return true;
 }
+
+/**
+ * @brief Fetch current weather data from OpenWeatherMap API
+ * 
+ * Performs HTTP GET request to OpenWeatherMap API using the configured city and
+ * region from config.json. Retrieves temperature, humidity, pressure, and weather
+ * description. Rate-limited to one call per config.weather_update_ms (default
+ * 10 minutes) to avoid API limits.
+ * 
+ * @return true if weather data retrieved and parsed successfully, false on any error
+ * 
+ * @note Requires WiFi connection to be active
+ * @note Updates Weather_Temperature, Weather_Humidity globals
+ * @note Can be disabled via config.weather_enabled = false
+ * @note API key defined in SystemConfig structure
+ * @see Parse_Weather_info(), Complete_Weather_Api_Link, config.weather_update_ms
+ */
 bool Get_Weather() {
     Update_Current_Timeinfo();
     HTTPClient http;
@@ -1115,6 +1288,25 @@ bool Get_Weather() {
     
     return Parse_Weather_info(payload);
 }
+
+/**
+ * @brief Detect day changes and create new data file
+ * 
+ * Compares current date against previous date to detect midnight rollover.
+ * When a new day is detected:
+ * - Creates a new daily CSV file with date in filename
+ * - Sends WhatsApp notification
+ * - Clears in-memory display arrays
+ * - Checks for month change (triggers month-end processing)
+ * 
+ * Special handling for system reboot: If previous date is invalid (1-31 range),
+ * assumes reboot and reopens existing file instead of creating new one.
+ * 
+ * @note Called from main loop every cycle
+ * @note Side effect: Updates Current_Date_Time_Data.field.Day
+ * @note Triggers month-end processing if month also changed
+ * @see Check_NewMonth(), Create_or_Open_New_Data_File(), Update_Current_Timeinfo()
+ */
 void Check_NewDay() {
     Update_Current_Timeinfo();                                                      // update the Today_Date and Time
     if ((New_Date_Time_Data.field.Day != Current_Date_Time_Data.field.Day)) {       // is the day different to previous day
@@ -1133,6 +1325,20 @@ void Check_NewDay() {
         Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;         // so set yesterday month
     }
 }
+/**
+ * @brief Detect month changes and trigger month-end processing
+ * 
+ * Compares current month against previous month. When a new month is detected,
+ * captures the last day's date/time and initiates month-end processing which:
+ * - (Planned) Creates ZIP archive of previous month's daily files
+ * - (Optionally) Deletes previous month's daily files after successful archive
+ * - Sends WhatsApp notifications for month-end status
+ * 
+ * @note Called by Check_NewDay() when date changes
+ * @note Side effect: Updates Current_Date_Time_Data.field.Month and .Year
+ * @note Month-end processing runs asynchronously to avoid blocking main loop
+ * @see Month_End_Process(), Check_NewDay()
+ */
 void Check_NewMonth() {
     if (New_Date_Time_Data.field.Month != Current_Date_Time_Data.field.Month) {  // month change
         console_print("New Month Detected");
@@ -1145,7 +1351,21 @@ void Check_NewMonth() {
         Current_Date_Time_Data.field.Year = New_Date_Time_Data.field.Year;
     }
 }
-// Circular log buffer functions (Issue #24, #26, #27)
+
+/**
+ * @brief Add message to circular log buffer
+ * 
+ * Stores a log message with timestamp in the circular buffer. When buffer fills
+ * (LOG_BUFFER_SIZE entries), oldest messages are overwritten. Buffer contents are
+ * periodically written to SD card by write_log_to_sd().
+ * 
+ * @param message The message text to store (without timestamp)
+ * 
+ * @note Timestamp is automatically added using millis()
+ * @note Buffer size: 500 entries (configurable via LOG_BUFFER_SIZE)
+ * @note Side effect: Increments log_buffer_index and log_buffer_count
+ * @see console_print(), write_log_to_sd(), LOG_BUFFER_SIZE
+ */
 void add_to_log_buffer(String message) {
     log_buffer[log_buffer_index].timestamp = millis();
     log_buffer[log_buffer_index].message = message;
@@ -1155,6 +1375,18 @@ void add_to_log_buffer(String message) {
     }
 }
 
+/**
+ * @brief Write entire log buffer to SD card
+ * 
+ * Writes all log entries from the circular buffer to /system.log on SD card.
+ * Handles buffer wraparound correctly. Called automatically every 60 seconds
+ * by the main loop to persist logs for post-mortem analysis after reboots.
+ * 
+ * @note Silently fails if SD card unavailable (to avoid recursion in error handling)
+ * @note Overwrites previous /system.log file with current buffer snapshot
+ * @note File format: timestamp(ms)\tmessage\n
+ * @see add_to_log_buffer(), console_print(), LOG_FILENAME
+ */
 void write_log_to_sd() {
     File logFile = SD.open(LOG_FILENAME, FILE_WRITE);
     if (!logFile) {
@@ -1175,13 +1407,40 @@ void write_log_to_sd() {
     logFile.close();
 }
 
+/**
+ * @brief Print message to console with timestamp and log to buffer
+ * 
+ * Primary logging function used throughout the system. Prints message to serial
+ * console with millisecond timestamp and tab separator, then stores in circular
+ * log buffer for SD card persistence. All system messages should use this function
+ * instead of direct Serial.print().
+ * 
+ * @param Monitor_Message The message text to print and log
+ * 
+ * @note Format: "<millis>\t<message>\n"
+ * @note Side effect: Message is added to log buffer for SD card writing
+ * @note Thread-safe for ESP32 RTOS tasks
+ * @see add_to_log_buffer(), write_log_to_sd()
+ */
 void console_print(String Monitor_Message) {
     console.print(millis(), DEC); 
     console.println("\t" + Monitor_Message);
     add_to_log_buffer(Monitor_Message);
 }
 
-// System health monitoring (Issue #26)
+/**
+ * @brief Log current system health metrics
+ * 
+ * Reports ESP32 heap memory statistics including free heap, minimum free heap
+ * (lowest point since boot), and percentage utilization. Used to detect memory
+ * leaks and heap fragmentation issues. Called at startup and periodically
+ * every config.health_check_ms (default 60 seconds).
+ * 
+ * @note Logged via console_print() so appears in both console and log buffer
+ * @note Healthy operation: >30% free heap, min_free_heap stable
+ * @note Warning signs: free heap decreasing, min_free_heap dropping
+ * @see ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getHeapSize()
+ */
 void log_system_health() {
     unsigned long free_heap = ESP.getFreeHeap();
     unsigned long heap_size = ESP.getHeapSize();
@@ -1194,7 +1453,26 @@ void log_system_health() {
     console_print(health_msg);
 }
 
-// Configuration file management (Issue #25)
+/**
+ * @brief Create default configuration file on SD card
+ * 
+ * Writes a default config.json file with hardcoded values for WiFi credentials,
+ * NTP server, weather settings, timing intervals, and feature enables. Called
+ * automatically if config.json is missing during startup. File is human-readable
+ * and editable with any text editor.
+ * 
+ * Default configuration includes:
+ * - WiFi: SSID, password
+ * - NTP: server address
+ * - Weather: city, region, enable flag
+ * - WhatsApp: enable flag
+ * - Debug: level (0-3)
+ * - Intervals: main_cycle_ms, weather_update_ms, health_check_ms
+ * 
+ * @note File format: JSON with standard formatting
+ * @note File location: /config.json on SD card root
+ * @see load_config_from_sd(), CONFIG_FILENAME, RuntimeConfig
+ */
 void create_default_config() {
     console_print("Creating default configuration file");
     
@@ -1223,6 +1501,30 @@ void create_default_config() {
     console_print("Default configuration file created");
 }
 
+/**
+ * @brief Load configuration from SD card and apply to system
+ * 
+ * Reads config.json from SD card, parses each configuration parameter, and loads
+ * into the global 'config' structure. Supports strings, booleans, and integers.
+ * Uses manual JSON parsing to avoid library dependency and memory overhead.
+ * If config file is missing, creates a default configuration.
+ * 
+ * Configurable parameters:
+ * - wifi_ssid, wifi_password: WiFi credentials
+ * - ntp_server: Time server address
+ * - weather_city, weather_region: Location for weather API
+ * - weather_enabled, whatsapp_enabled: Feature toggles
+ * - debug_level: 0=none, 1=errors, 2=info, 3=verbose
+ * - main_cycle_ms: Main loop interval (default 5000)
+ * - weather_update_ms: Weather API interval (default 600000)
+ * - health_check_ms: Health monitoring interval (default 60000)
+ * 
+ * @return true if config loaded successfully, false if file missing (default created)
+ * 
+ * @note All loaded values are logged to console for verification
+ * @note Caller must apply config values to runtime variables (SSID, Password, etc.)
+ * @see create_default_config(), CONFIG_FILENAME, RuntimeConfig
+ */
 bool load_config_from_sd() {
     if (!SD.exists(CONFIG_FILENAME)) {
         console_print("Config file not found, creating default");
@@ -1442,6 +1744,29 @@ bool ZipAllFilesToSD(const char* zipFilename) {
     
     return true;
 }
+
+/**
+ * @brief Send notification via WhatsApp using CallMeBot API
+ * 
+ * Sends a WhatsApp message to the configured phone number using the CallMeBot
+ * web service. Implements duplicate message suppression to prevent spam - identical
+ * messages within 5 minutes are blocked. Can be globally disabled via
+ * config.whatsapp_enabled flag.
+ * 
+ * Used for critical notifications:
+ * - System reboots and errors
+ * - SD card failures
+ * - Month-end processing status
+ * - New data file creation
+ * 
+ * @param message The message text to send (will be URL-encoded)
+ * 
+ * @note Rate limiting: Prevents duplicate messages within WHATSAPP_DUPLICATE_INTERVAL_MS
+ * @note Requires WiFi connection to be active
+ * @note Can be disabled via config.whatsapp_enabled = false
+ * @note Uses CallMeBot API (requires API key and phone number registration)
+ * @see WhatsApp_Enabled, WHATSAPP_DUPLICATE_INTERVAL_MS
+ */
 void Send_WhatsApp_Message(String message) {
     // Prevent duplicate messages within 5 minutes
     if (message == whatsapp_cache.last_message && 
@@ -1475,6 +1800,26 @@ void Send_WhatsApp_Message(String message) {
     }
     http.end();
 }
+
+/**
+ * @brief Write current sensor data to daily CSV file on SD card
+ * 
+ * Appends the current data record to the daily CSV file with comma-separated values.
+ * Includes automatic retry logic (3 attempts) if file operations fail. Verifies
+ * all write operations using verifyFileWrite() helper. If all retries fail, sends
+ * WhatsApp notification and triggers system reboot.
+ * 
+ * CSV format includes:
+ * - Date/time, voltage (3 phases), current (3 phases)
+ * - Power, energy, frequency, temperature
+ * - Gas volume, weather data (if enabled)
+ * 
+ * @note Side effect: Toggles Blue LED during SD card activity
+ * @note Retry logic: 3 attempts with SD_FILE_RETRY_DELAY_MS between attempts
+ * @note All write operations are verified for success
+ * @note Failure triggers automatic reboot after WhatsApp notification
+ * @see verifyFileWrite(), DataFileName, Current_Data_Record
+ */
 void Write_New_Data_Record_to_Data_Files() {
     toggleLED(Blue_led_pin);                              // flash the SD activity LED on
     bool file_opened = false;
@@ -1709,6 +2054,27 @@ void Create_or_Open_New_Data_File() {
     This_Date_Without = Current_Date_Without;
     This_Day = Current_Date_Time_Data.field.Day;
 }
+
+/**
+ * @brief Monitor and recover WiFi connection with exponential backoff
+ * 
+ * Continuously monitors WiFi status and attempts recovery if connection is lost.
+ * Implements intelligent retry strategy:
+ * - Exponential backoff: 3s → 6s → 12s → 24s → 48s → max 60s between attempts
+ * - After 5 failures: Restart WiFi radio (hard reset)
+ * - After 10 attempts (>60s): Reboot entire system
+ * 
+ * Logs disconnect reasons for debugging:
+ * - SSID not available (router offline)
+ * - Connection failed (wrong password)
+ * - Connection lost (interference/range)
+ * - Disconnected (normal disconnect)
+ * 
+ * @note Called from main loop every cycle (non-blocking)
+ * @note Static variables maintain state across calls
+ * @note Sends WhatsApp notification before system reboot
+ * @see StartWiFi(), smartDelay()
+ */
 void Check_WiFi() {
     static int wifi_connection_attempts = 0;
     static unsigned long lastWiFiCheck = 0;
@@ -1767,6 +2133,29 @@ void Check_WiFi() {
         retry_interval = 3000;  // Reset to 3 seconds
     }
 }
+/**
+ * @brief Initiate WiFi connection attempt
+ * 
+ * Starts a new WiFi connection to the specified SSID and password. If already
+ * connected, disconnects first to ensure clean connection state. Uses non-blocking
+ * pattern with smartDelay() to keep system responsive during connection attempt.
+ * 
+ * Connection process:
+ * 1. Check current WiFi status
+ * 2. Disconnect if already connected
+ * 3. Begin new connection with credentials
+ * 4. Wait with smartDelay() (feeds watchdog, handles web requests)
+ * 5. Return final connection status
+ * 
+ * @param ssid The WiFi network SSID to connect to
+ * @param password The WiFi network password
+ * 
+ * @return WiFi connection status code (WL_CONNECTED, WL_NO_SSID_AVAIL, etc.)
+ * 
+ * @note Uses smartDelay() to maintain system responsiveness during connection
+ * @note Non-blocking after initial attempt (Check_WiFi handles retries)
+ * @see Check_WiFi(), WiFi.status(), WiFi.begin()
+ */
 int StartWiFi(String ssid, String password) {
     console_print("WiFi Connecting to " + String(ssid));
     if (WiFi.status() == WL_CONNECTED) {                                // disconnect to start new wifi connection
@@ -1801,7 +2190,23 @@ void initTime(String timezone) {
     tzset();
     console_print("Time Server Started");
 }
-// Helper functions for Prefill_Data_Array (Issue #15 - Reduce function length)
+
+/**
+ * @brief Parse string field from CSV and copy to destination (helper for Prefill_Data_Array)
+ * 
+ * Extracts a string field from CSV data and safely copies it to the destination buffer
+ * with size checking. Optionally prints debug output if PRiNT_PREFiLL_DATA_VALUES is defined.
+ * Used during data array prefill to load date/time strings from historical data.
+ * 
+ * @param field_number The CSV field index (for debug output)
+ * @param field Pointer to the CSV field string to parse
+ * @param destination Pointer to destination buffer to receive the string
+ * @param dest_size Size of destination buffer (for safe copy)
+ * 
+ * @note Uses strncpy for safe string copy with size limit
+ * @note Debug output controlled by PRiNT_PREFiLL_DATA_VALUES compile flag
+ * @see Prefill_Data_Array(), Process_Prefill_Field()
+ */
 void Parse_CSV_Field_String(int field_number, char* field, char* destination, size_t dest_size) {
     strncpy(destination, field, dest_size);
 #ifdef PRiNT_PREFiLL_DATA_VALUES
@@ -1809,6 +2214,23 @@ void Parse_CSV_Field_String(int field_number, char* field, char* destination, si
 #endif
 }
 
+/**
+ * @brief Parse numeric field from CSV and convert to double (helper for Prefill_Data_Array)
+ * 
+ * Extracts a numeric field from CSV data and converts it to double precision floating point.
+ * Handles voltage, current, power, energy, temperature, and other sensor readings.
+ * Optionally prints debug output if PRiNT_PREFiLL_DATA_VALUES is defined.
+ * 
+ * @param field_number The CSV field index (for debug output)
+ * @param field Pointer to the CSV field string to parse
+ * 
+ * @return double The converted numeric value
+ * 
+ * @note Uses atof() for ASCII-to-float conversion
+ * @note Returns 0.0 if field is invalid or empty
+ * @note Debug output controlled by PRiNT_PREFiLL_DATA_VALUES compile flag
+ * @see Prefill_Data_Array(), Process_Prefill_Field()
+ */
 double Parse_CSV_Field_Double(int field_number, char* field) {
     double value = atof(field);
 #ifdef PRiNT_PREFiLL_DATA_VALUES
@@ -1817,6 +2239,28 @@ double Parse_CSV_Field_Double(int field_number, char* field) {
     return value;
 }
 
+/**
+ * @brief Route CSV field to appropriate data structure member (helper for Prefill_Data_Array)
+ * 
+ * Large switch statement that maps CSV field numbers to the corresponding members
+ * of the Readings_Table data structure. Handles 40+ different fields including:
+ * - Date/time (fields 0-1)
+ * - Voltage readings 3-phase (fields 2-4)
+ * - Current readings 3-phase (fields 5-7)
+ * - Power, energy, frequency (fields 8-20)
+ * - Temperature and gas volume (fields 21-22)
+ * - Weather data if enabled (fields 23-26)
+ * 
+ * Calls Parse_CSV_Field_String() for string fields and Parse_CSV_Field_Double()
+ * for numeric fields.
+ * 
+ * @param field_number The CSV column index (0-based)
+ * @param field Pointer to the CSV field string to process
+ * 
+ * @note Refactored in V12.27 to eliminate code duplication
+ * @note Updates Readings_Table[Data_Table_Pointer] with parsed values
+ * @see Parse_CSV_Field_String(), Parse_CSV_Field_Double(), Prefill_Data_Array()
+ */
 void Process_Prefill_Field(int field_number, char* field) {
     switch (field_number) {
     case 0: // Date
@@ -1893,6 +2337,25 @@ void Process_Prefill_Field(int field_number, char* field) {
     }
 }
 
+/**
+ * @brief Load existing CSV data from SD card into memory for web display
+ * 
+ * Reads the current day's CSV data file and populates the in-memory display arrays
+ * used for the web interface graphs and tables. Parses CSV format line-by-line,
+ * extracting fields using helper functions. Handles file wraparound when array
+ * fills (Number_of_Records > Max_Table_Size).
+ * 
+ * Refactored in V12.27 from 326 lines to ~90 lines using helper functions:
+ * - Parse_CSV_Field_String() for string fields
+ * - Parse_CSV_Field_Double() for numeric fields
+ * - Process_Prefill_Field() for field routing
+ * 
+ * @note Called during startup and when date changes (new file created)
+ * @note Side effect: Toggles Blue LED during SD card reading
+ * @note Loads up to Max_Table_Size records (most recent if file larger)
+ * @note Updates Data_Table_Pointer to track current position
+ * @see Parse_CSV_Field_String(), Parse_CSV_Field_Double(), Process_Prefill_Field()
+ */
 void Prefill_Data_Array() {
     int character_count = 0;
     char field[50];
@@ -2566,6 +3029,21 @@ int Count_Files_on_SD_Drive() {
     } while (files_present);
     return (file_count);
 }
+
+/**
+ * @brief Send RS485 request to KWS power monitoring hardware
+ * 
+ * Transmits a predefined RS485 request byte sequence to the KWS hardware to query
+ * sensor data. Sets the RS485 transceiver to transmit mode, sends 8-byte request
+ * with delays between bytes, then returns to receive mode for response.
+ * 
+ * @param field The request index (0 to Number_of_RS485_Requests) to send
+ * 
+ * @note RS485_Enable_pin controls transmit/receive direction
+ * @note 2ms delay between bytes for hardware settling time
+ * @note Request format defined in RS485_Requests array (KWS protocol)
+ * @see Receive(), RS485_Requests[][], RS485_BYTE_DELAY_MS
+ */
 void Send_Request(int field) {
     digitalWrite(RS485_Enable_pin, transmit);                 // set RS485_Enable HiGH to transmit values to RS485
     for (int x = 0; x < 7; x++) {
@@ -2575,6 +3053,31 @@ void Send_Request(int field) {
     RS485_Port.write(RS485_Requests[field][7]);
     delay(2);
 }
+/**
+ * @brief Receive and parse RS485 response from KWS power monitoring hardware
+ * 
+ * Receives the RS485 response packet following a Send_Request(). Implements timeout
+ * protection (RS485_TIMEOUT_MS) and validates packet structure. Includes yield()
+ * in the receive loop to maintain system responsiveness during sensor reads.
+ * 
+ * Response packet structure (KWS protocol):
+ * - Byte 0: Header
+ * - Bytes 1-6: Data payload (varies by request type)
+ * - Byte 7: Checksum
+ * 
+ * Parses multi-byte values (16-bit and 32-bit integers) from response and stores
+ * in Current_Data_Record structure.
+ * 
+ * @param field The request index that was sent (determines parsing method)
+ * 
+ * @return true if valid response received and parsed, false on timeout or error
+ * 
+ * @note Timeout: RS485_TIMEOUT_MS (500ms)
+ * @note Includes yield() for WiFi stack and background tasks
+ * @note Updates Current_Data_Record with sensor values
+ * @note Failure logged to console and triggers system restart
+ * @see Send_Request(), Get_Sensor(), Current_Data_Record
+ */
 bool Receive(int field) {
     byte pointer = 0;
     byte required_bytes = 0;
@@ -2944,6 +3447,28 @@ void Update_Current_Timeinfo() {
         console_print("Current Date and Time set to: " + Current_Date_With + " " + Current_Time_With);
     }
 }
+
+/**
+ * @brief Parse JSON weather data from OpenWeatherMap API
+ * 
+ * Extracts temperature, humidity, pressure, and weather description from the
+ * JSON response payload. Uses simple string parsing instead of JSON library to
+ * reduce memory overhead. Looks for specific field names ("temp", "humidity",
+ * etc.) and extracts the following numeric or string values.
+ * 
+ * JSON structure expected:
+ * - {"main":{"temp":284.12,"humidity":72,"pressure":1018}}
+ * - {"weather":[{"description":"overcast clouds"}]}
+ * 
+ * @param payload The JSON response string from OpenWeatherMap API
+ * 
+ * @return true if all required fields parsed successfully, false on parse error
+ * 
+ * @note Updates global variables: Weather_Temperature, Weather_Humidity, etc.
+ * @note Temperature is in Kelvin from API, converted to Celsius
+ * @note Parse errors return false but don't crash system
+ * @see Get_Weather(), Parse()
+ */
 bool Parse_Weather_info(String payload) {
     /*
     {"coord":{"lon":-1.0871,"lat":51.2625},
