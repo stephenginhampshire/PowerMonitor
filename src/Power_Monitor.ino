@@ -64,6 +64,12 @@ Change Record
 30/12/2025  12.35 Date/time validation added (Issue #23) - NTP time data validated for reasonable ranges before use, prevents invalid timestamps in data
 30/12/2025  12.36 Circular log buffer implemented (Issues #24, #26, #27) - 500-entry circular buffer logs to SD, system health monitoring, version info logged at startup
 30/12/2025  12.37 Configuration file system (Issue #25) - Runtime configuration via config.json on SD card, no recompile needed for WiFi, intervals, features
+30/12/2025  1.0.0 Semantic versioning adopted (Issue #27) - MAJOR.MINOR.PATCH format for clear version communication, helper function for formatted version display
+
+SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
+- MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
+- MINOR: Increment for new features (new sensors, new web pages, new capabilities) that are backwards-compatible
+- PATCH: Increment for bug fixes and small improvements that don't add features
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -83,7 +89,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.37";
+
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -114,6 +120,12 @@ String version = "V12.37";
 // definitions --------------
 #define console Serial
 #define RS485_Port Serial2
+
+// Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
+#define VERSION_MAJOR 1   // Incompatible API changes
+#define VERSION_MINOR 0   // Backwards-compatible functionality additions
+#define VERSION_PATCH 0   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.0.0"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -170,6 +182,17 @@ const String CONFIG_FILENAME = "/config.json";       // Configuration file on SD
 #include <UrlEncode.h>
 #include <EEPROM.h>
 // -----------
+
+// ================================================================================
+// VERSION MANAGEMENT (Issue #27 - Semantic Versioning)
+// ================================================================================
+
+// Returns formatted version string with build information
+String get_version_string() {
+    String version = "Version " VERSION_STRING;
+    version += " (Built: " + String(__DATE__) + " " + String(__TIME__) + ")";
+    return version;
+}
 
 // ================================================================================
 // SYSTEM CONFIGURATION STRUCTURES (Issue #5 - Reduce Global Variables)
@@ -318,7 +341,7 @@ bool WhatsApp_Enabled = true;
 //bool WhatsApp_Debug = true;
 //String WhatsApp_url_1 = "https://api.callmebot.com/whatsapp.php?phone=+447785938200&text=";
 //String WhatsApp_url_2 = "&apikey=8876034";
-String hostname = "Power Monitor " + version;
+String hostname = "Power Monitor " VERSION_STRING;
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 3600;                         // offset for the date and time function
 const String WiFi_Status_Message[7] = {
@@ -768,7 +791,7 @@ void setup() {
     delay(STARTUP_DELAY_MS);
     
     console_print("\n\nPower Monitor System Starting...");
-    console_print("Version: " + version);
+    console_print(get_version_string());
     
     // Initialize EEPROM for gas volume persistence
     EEPROM.begin(EEPROM_SIZE);
@@ -987,8 +1010,7 @@ void setup() {
         
         // Log system information at startup (Issue #27 - Version Management)
         console_print("=== SYSTEM STARTUP ===");
-        console_print("Version: " + version);
-        console_print("Build Date: " + String(__DATE__) + " " + String(__TIME__));
+        console_print(get_version_string());
         console_print("ESP32 Chip ID: " + String((uint32_t)ESP.getEfuseMac(), HEX));
         console_print("SDK Version: " + String(ESP.getSdkVersion()));
         log_system_health();
@@ -2022,7 +2044,7 @@ void Page_Footer() {
     webpage += F(">");
     webpage += String(signature);
     webpage += F(" (");
-    webpage += String(version);
+    webpage += String(VERSION_STRING);
     webpage += F(") Last Page Update - ");
     webpage += String(Current_Time_With);
     webpage += F(" SD Free Space = ");
