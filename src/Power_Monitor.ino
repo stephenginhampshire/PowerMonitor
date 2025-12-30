@@ -56,6 +56,7 @@ Change Record
 30/12/2025  12.27 Long function refactoring (Issue #15) - Prefill_Data_Array() reduced from 326 lines to ~90 lines by extracting CSV parsing into reusable helper functions
 30/12/2025  12.28 Code duplication eliminated (Issue #16) - Created toggleLED() helper function, replaced 4 instances of digitalWrite(pin, !digitalRead(pin))
 30/12/2025  12.29 Header guards added (Issue #17) - Added traditional #ifndef/#define/#endif guards to Configuration.h and KWS_Protocol.h for maximum portability
+30/12/2025  12.30 Debug output standardized (Issue #18) - Implemented DEBUG_LEVEL system with DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros for consistent debug control
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -75,11 +76,34 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.29";
+String version = "V12.30";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
 //#define PRiNT_MONTH_DATA_VALUES
+
+// Debug Level System (Issue #18 - Standardize Debug Output)
+// DEBUG_LEVEL: 0=none, 1=errors, 2=info, 3=verbose
+#define DEBUG_LEVEL 2
+
+#if DEBUG_LEVEL >= 1
+    #define DEBUG_ERROR(x) console_print(x)
+#else
+    #define DEBUG_ERROR(x)
+#endif
+
+#if DEBUG_LEVEL >= 2
+    #define DEBUG_INFO(x) console_print(x)
+#else
+    #define DEBUG_INFO(x)
+#endif
+
+#if DEBUG_LEVEL >= 3
+    #define DEBUG_VERBOSE(x) console_print(x)
+#else
+    #define DEBUG_VERBOSE(x)
+#endif
+
 // definitions --------------
 #define console Serial
 #define RS485_Port Serial2
@@ -823,14 +847,14 @@ void setup() {
             else {
                 card = "UNKNOWN";
             }
-            console_print("SD Card Type: " + card);
+            DEBUG_INFO("SD Card Type: " + card);
             unsigned long cardSize = SD.cardSize() / (1024 * 1024);
-            console_print("SD Card Size : " + String(cardSize) + "MBytes");
+            DEBUG_INFO("SD Card Size : " + String(cardSize) + "MBytes");
             console_print("SD Total Bytes : " + String(SD.totalBytes()));
             console_print("SD Used bytes : " + String(SD.usedBytes()));
-            console_print("SD Card initialisation Complete");
+            DEBUG_INFO("SD Card initialisation Complete");
         }
-        console_print("SD Configuration Complete");
+        DEBUG_INFO("SD Configuration Complete");
         console_print("Date and Time Update");
         Update_Current_Timeinfo();                                              // update This date time info, no /s
         console_print("Setting Previous Date and Time to Today Date and Time");
@@ -1073,7 +1097,7 @@ bool ZipAllFilesToSD(const char* zipFilename) {
     // Open monthly file for writing
     File monthlyFile = SD.open("/" + monthlyFileName, FILE_WRITE);
     if (!monthlyFile) {
-        console_print("ERROR: Failed to create monthly file: " + monthlyFileName);
+        DEBUG_ERROR("ERROR: Failed to create monthly file: " + monthlyFileName);
         return false;
     }
     
@@ -1162,7 +1186,7 @@ void Send_WhatsApp_Message(String message) {
         whatsapp_cache.last_message_time = millis();
     }
     else {
-        console_print("Error sending the WhatsApp message: " + message + " Response Code:" + String(httpResponseCode));
+        DEBUG_ERROR("Error sending the WhatsApp message: " + message + " Response Code:" + String(httpResponseCode));
     }
     http.end();
 }
@@ -1175,13 +1199,13 @@ void Write_New_Data_Record_to_Data_Files() {
             file_opened = true;
             break;
         }
-        console_print("Error re-opening DataFile:" + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
+        DEBUG_ERROR("Error re-opening DataFile:" + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
         if (retry < SD_RETRY_ATTEMPTS) {
             delay(1000);  // Wait 1 second before retry
         }
     }
     if (!file_opened) {
-        console_print("Error re-opening DataFile:" + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
+        DEBUG_ERROR("Error re-opening DataFile:" + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
         Send_WhatsApp_Message("Power Monitor - Error re-opening DataFile: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
         delay(5000);
         ESP.restart();
@@ -1301,13 +1325,13 @@ void Create_or_Open_New_Data_File() {
                 file_created = true;
                 break;
             }
-            console_print("Error creating Data file: " + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
+            DEBUG_ERROR("Error creating Data file: " + String(DataFileName) + " - Retry " + String(retry) + " of " + String(SD_RETRY_ATTEMPTS));
             if (retry < SD_RETRY_ATTEMPTS) {
                 delay(1000);  // Wait 1 second before retry
             }
         }
         if (!file_created) {
-            console_print("Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
+            DEBUG_ERROR("Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
             delay(5000);
             ESP.restart();

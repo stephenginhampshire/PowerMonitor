@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.29
-File: Power_Monitor.ino (2591 lines)
+Current Version: V12.30
+File: Power_Monitor.ino (2614 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -404,16 +404,37 @@ CODE STRUCTURE
     
     Recommendation: Use both #pragma once and traditional guards for all future headers
 
-18. Inconsistent Debug Output
+18. Inconsistent Debug Output - FIXED (V12.30)
     Issue: Mix of commented debug code and preprocessor directives
            Some debug output always prints, some conditionally
     
-    Recommendation: Standardize on preprocessor approach:
-                    #define DEBUG_LEVEL 1  // 0=none, 1=errors, 2=info, 3=verbose
-                    
-                    #define DEBUG_ERROR(x) if(DEBUG_LEVEL >= 1) console_print(x)
-                    #define DEBUG_INFO(x)  if(DEBUG_LEVEL >= 2) console_print(x)
-                    #define DEBUG_VERBOSE(x) if(DEBUG_LEVEL >= 3) console_print(x)
+    RESOLUTION:
+    - Implemented standardized debug level system:
+      * DEBUG_LEVEL macro: 0=none, 1=errors, 2=info, 3=verbose
+      * DEBUG_ERROR(x) - Critical errors only (level >= 1)
+      * DEBUG_INFO(x) - Informational messages (level >= 2)  
+      * DEBUG_VERBOSE(x) - Verbose debugging (level >= 3)
+    
+    - Compiler completely eliminates disabled debug code (zero overhead)
+    - Applied to key locations:
+      * SD card errors (DEBUG_ERROR)
+      * File operation errors (DEBUG_ERROR)
+      * WhatsApp errors (DEBUG_ERROR)
+      * SD card info (DEBUG_INFO)
+      * Configuration status (DEBUG_INFO)
+    
+    - Changed from runtime if() to compile-time #if for efficiency
+    - Single #define DEBUG_LEVEL controls all debug output
+    - Set to level 2 (errors + info) by default
+    
+    Results:
+    - Consistent debug output approach
+    - Easy to disable for production (set DEBUG_LEVEL 0)
+    - Zero performance impact when disabled
+    - Code remains readable and maintainable
+    
+    Recommendation: Continue migrating remaining console_print() calls to DEBUG macros
+                    Use DEBUG_VERBOSE for detailed tracing during development
 
 ================================================================================
 PERFORMANCE
