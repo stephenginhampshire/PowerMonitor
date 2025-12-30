@@ -61,6 +61,7 @@ Change Record
 30/12/2025  12.32 RS485 communication improved (Issue #20) - Added yield() to RS485 receive loop allowing WiFi stack and background tasks during sensor reads
 30/12/2025  12.33 WiFi recovery enhanced (Issue #21) - Implemented exponential backoff, WiFi radio restart, disconnect reason logging for robust recovery
 30/12/2025  12.34 File write verification added (Issue #22) - All SD card write operations now verified to detect silent failures and ensure data integrity
+30/12/2025  12.35 Date/time validation added (Issue #23) - NTP time data validated for reasonable ranges before use, prevents invalid timestamps in data
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -80,7 +81,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.34";
+String version = "V12.35";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -2588,6 +2589,43 @@ void Update_Current_Timeinfo() {
     New_Date_Time_Data.field.Hour = timeinfo.tm_hour;
     New_Date_Time_Data.field.Minute = timeinfo.tm_min;
     New_Date_Time_Data.field.Second = timeinfo.tm_sec;
+    
+    // Validate received time data (Issue #23 - Date/Time Validation)
+    bool time_valid = true;
+    String validation_error = "";
+    
+    if (New_Date_Time_Data.field.Year < 2025 || New_Date_Time_Data.field.Year > 2100) {
+        validation_error = "Invalid year: " + String(New_Date_Time_Data.field.Year);
+        time_valid = false;
+    }
+    if (New_Date_Time_Data.field.Month < 1 || New_Date_Time_Data.field.Month > 12) {
+        validation_error = "Invalid month: " + String(New_Date_Time_Data.field.Month);
+        time_valid = false;
+    }
+    if (New_Date_Time_Data.field.Day < 1 || New_Date_Time_Data.field.Day > 31) {
+        validation_error = "Invalid day: " + String(New_Date_Time_Data.field.Day);
+        time_valid = false;
+    }
+    if (New_Date_Time_Data.field.Hour > 23) {
+        validation_error = "Invalid hour: " + String(New_Date_Time_Data.field.Hour);
+        time_valid = false;
+    }
+    if (New_Date_Time_Data.field.Minute > 59) {
+        validation_error = "Invalid minute: " + String(New_Date_Time_Data.field.Minute);
+        time_valid = false;
+    }
+    if (New_Date_Time_Data.field.Second > 59) {
+        validation_error = "Invalid second: " + String(New_Date_Time_Data.field.Second);
+        time_valid = false;
+    }
+    
+    if (!time_valid) {
+        DEBUG_ERROR("NTP time validation failed: " + validation_error);
+        Send_WhatsApp_Message("Power Monitor - Invalid NTP time received: " + validation_error + " - Restarting");
+        smartDelay(2000);
+        ESP.restart();
+    }
+    
     // DATE --
     Current_Date_With = String(New_Date_Time_Data.field.Year);        //  1951
     Current_Date_Without = String(New_Date_Time_Data.field.Year);        //  1951

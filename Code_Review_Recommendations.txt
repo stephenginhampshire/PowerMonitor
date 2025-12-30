@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.34
-File: Power_Monitor.ino (2751 lines)
+Current Version: V12.35
+File: Power_Monitor.ino (2794 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -616,24 +616,53 @@ RELIABILITY
     - User notification via WhatsApp on write failures
     - Increased confidence in data logging reliability
 
-23. Date/Time Validation Minimal
+23. Date/Time Validation Minimal - FIXED (V12.35)
     Location: Update_Current_Timeinfo() (Line 2068)
     Issue: Limited validation of NTP time before use
            No check for reasonable date ranges
            Could accept invalid dates (e.g., year 2099, day 32)
     
-    Recommendation: Validate received time:
-                    if (New_Date_Time_Data.field.Year < 2022 || 
-                        New_Date_Time_Data.field.Year > 2100) {
-                        console_print("Invalid year received");
-                        return false;
-                    }
-                    if (New_Date_Time_Data.field.Month < 1 || 
-                        New_Date_Time_Data.field.Month > 12) {
-                        console_print("Invalid month received");
-                        return false;
-                    }
-                    // ... validate day, hour, minute, second
+    RESOLUTION:
+    - Added comprehensive time validation after NTP sync:
+      * Year range: 2025-2100 (reasonable operational window)
+      * Month range: 1-12
+      * Day range: 1-31
+      * Hour range: 0-23
+      * Minute range: 0-59
+      * Second range: 0-59
+    
+    - Validation strategy:
+      * Check all time fields immediately after getLocalTime() succeeds
+      * Use boolean flag to track overall validity
+      * Accumulate validation error messages
+      * Log specific field that failed validation
+    
+    - Failure handling:
+      * Log error with DEBUG_ERROR including specific invalid value
+      * Send WhatsApp notification with validation details
+      * Restart system after 2-second delay
+      * Prevents operation with invalid timestamp
+    
+    - Protection against:
+      * NTP server providing incorrect time
+      * Corrupted time data from network
+      * System clock drift to unreasonable values
+      * Filesystem issues from invalid timestamps
+      * Invalid filenames from bad date data
+    
+    Results:
+    - Prevents creation of files with invalid dates
+    - Ensures all logged data has valid timestamps
+    - Detects NTP server issues immediately
+    - System restarts to resync time if validation fails
+    - User notification of time sync problems
+    
+    Benefits:
+    - Data integrity (all records have valid timestamps)
+    - Reliable filename generation from dates
+    - Early detection of NTP issues
+    - Prevents hard-to-diagnose timestamp problems
+    - Clean restart and resync on validation failure
 
 ================================================================================
 ADDITIONAL RECOMMENDATIONS
