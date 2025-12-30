@@ -59,6 +59,7 @@ Change Record
 30/12/2025  12.30 Debug output standardized (Issue #18) - Implemented DEBUG_LEVEL system with DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros for consistent debug control
 30/12/2025  12.31 Blocking delays eliminated (Issue #19) - Replaced blocking delay() calls with non-blocking patterns to maintain system responsiveness
 30/12/2025  12.32 RS485 communication improved (Issue #20) - Added yield() to RS485 receive loop allowing WiFi stack and background tasks during sensor reads
+30/12/2025  12.33 WiFi recovery enhanced (Issue #21) - Implemented exponential backoff, WiFi radio restart, disconnect reason logging for robust recovery
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -78,7 +79,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.32";
+String version = "V12.33";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -1404,23 +1405,59 @@ void Create_or_Open_New_Data_File() {
 void Check_WiFi() {
     static int wifi_connection_attempts = 0;
     static unsigned long lastWiFiCheck = 0;
+    static unsigned long retry_interval = 3000;  // Start with 3 seconds
+    static int consecutive_failures = 0;
     
-    // Non-blocking WiFi check with 3-second retry interval (Issue #19 - Blocking Delays)
+    // Exponential backoff WiFi recovery (Issue #21 - WiFi Recovery Logic)
     if (WiFi.status() != WL_CONNECTED) {
-        if (millis() - lastWiFiCheck >= 3000) {
-            console_print("WiFi Connection Failed, Attempting to Reconnect");
-            console_print("Connection attempt " + String(wifi_connection_attempts));
+        if (millis() - lastWiFiCheck >= retry_interval) {
+            wifi_connection_attempts++;
+            consecutive_failures++;
             lastWiFiCheck = millis();
             
-            if (wifi_connection_attempts++ > 20) {
-                console_print("Network Error, WiFi lost >20 seconds, Restarting Processor");
+            // Log disconnect reason for debugging
+            wl_status_t status = WiFi.status();
+            String status_str = (status == WL_NO_SSID_AVAIL) ? "SSID not available" :
+                               (status == WL_CONNECT_FAILED) ? "Connection failed" :
+                               (status == WL_CONNECTION_LOST) ? "Connection lost" :
+                               (status == WL_DISCONNECTED) ? "Disconnected" : "Unknown";
+            
+            console_print("WiFi Connection Failed (" + status_str + "), Attempting to Reconnect");
+            console_print("Connection attempt " + String(wifi_connection_attempts) + 
+                         " with " + String(retry_interval/1000) + "s backoff");
+            
+            // After 5 failures, restart WiFi radio
+            if (consecutive_failures == 5) {
+                console_print("5 consecutive WiFi failures - Restarting WiFi radio");
+                WiFi.disconnect(true);
+                delay(1000);
+                WiFi.mode(WIFI_OFF);
+                delay(1000);
+                WiFi.mode(WIFI_STA);
+                delay(1000);
+            }
+            
+            // After 10 failures (>60 seconds), full system reboot
+            if (wifi_connection_attempts >= 10) {
+                console_print("Network Error, WiFi lost >60 seconds, Restarting Processor");
+                Send_WhatsApp_Message("Power Monitor - WiFi Recovery Failed - Automatic Reboot");
+                smartDelay(2000);
                 ESP.restart();
             }
+            
             StartWiFi(SSID, Password);
+            
+            // Exponential backoff: 3s, 6s, 12s, 24s, 48s, max 60s
+            retry_interval = min(retry_interval * 2, 60000UL);
         }
     } else {
-        // Reset counter when connected
+        // Reset counters and backoff when connected
+        if (wifi_connection_attempts > 0) {
+            console_print("WiFi reconnected successfully after " + String(wifi_connection_attempts) + " attempts");
+        }
         wifi_connection_attempts = 0;
+        consecutive_failures = 0;
+        retry_interval = 3000;  // Reset to 3 seconds
     }
 }
 int StartWiFi(String ssid, String password) {

@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.32
-File: Power_Monitor.ino (2658 lines)
+Current Version: V12.33
+File: Power_Monitor.ino (2709 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -525,17 +525,51 @@ PERFORMANCE
 RELIABILITY
 ================================================================================
 
-21. WiFi Recovery Logic Incomplete
+21. WiFi Recovery Logic Incomplete - FIXED (V12.33)
     Location: Check_WiFi() function (not fully shown but referenced)
     Issue: Attempts reconnection but limited retry strategy
            No exponential backoff
            May consume excessive power retrying continuously
     
-    Recommendation: Implement robust WiFi recovery:
-                    - Exponential backoff (1s, 2s, 4s, 8s, max 60s)
-                    - After N failures, restart WiFi radio
-                    - After M failures, full system reboot
-                    - Log WiFi disconnect reasons for debugging
+    RESOLUTION:
+    - Implemented exponential backoff strategy:
+      * Starts with 3-second retry interval
+      * Doubles on each failure: 3s, 6s, 12s, 24s, 48s
+      * Maximum backoff capped at 60 seconds
+      * Reduces power consumption and network load
+    
+    - Added WiFi radio restart after 5 consecutive failures:
+      * Full WiFi stack reset (disconnect, mode OFF, mode STA)
+      * Helps recover from driver-level issues
+      * Often resolves persistent connection problems
+    
+    - Implemented full system reboot after 10 attempts:
+      * ~60+ seconds of total WiFi failure triggers reboot
+      * Sends WhatsApp notification before restart
+      * Ensures system doesn't remain in failed state
+    
+    - Added WiFi disconnect reason logging:
+      * Reports specific failure reason (SSID unavailable, connection failed, etc.)
+      * Uses WiFi.status() to identify disconnect cause
+      * Aids in troubleshooting network issues
+    
+    - Improved success logging:
+      * Reports successful reconnection with attempt count
+      * Resets backoff interval on successful connection
+      * Clears failure counters when stable
+    
+    Results:
+    - Reduced power consumption during WiFi issues (less frequent retries)
+    - Better recovery from transient network problems
+    - Self-healing WiFi radio reset capability
+    - Diagnostic information for troubleshooting
+    - Graceful escalation from soft retry to full reboot
+    
+    Benefits:
+    - More robust WiFi connectivity in challenging environments
+    - Lower power usage during network outages
+    - Better logging for post-mortem analysis
+    - Automatic recovery without manual intervention
 
 22. File Operations Lack Verification
     Examples: Lines 920, 938, 807
