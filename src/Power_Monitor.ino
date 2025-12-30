@@ -62,6 +62,7 @@ Change Record
 30/12/2025  12.33 WiFi recovery enhanced (Issue #21) - Implemented exponential backoff, WiFi radio restart, disconnect reason logging for robust recovery
 30/12/2025  12.34 File write verification added (Issue #22) - All SD card write operations now verified to detect silent failures and ensure data integrity
 30/12/2025  12.35 Date/time validation added (Issue #23) - NTP time data validated for reasonable ranges before use, prevents invalid timestamps in data
+30/12/2025  12.36 Circular log buffer implemented (Issues #24, #26, #27) - 500-entry circular buffer logs to SD, system health monitoring, version info logged at startup
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -81,7 +82,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.35";
+String version = "V12.36";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -134,6 +135,12 @@ const int EEPROM_GAS_VOLUME_ADDR = 0;                // Address for gas volume (
 const int EEPROM_GAS_MAGIC_ADDR = 8;                 // Address for magic number (4 bytes)
 const uint32_t EEPROM_MAGIC_NUMBER = 0xDEADBEEF;     // Magic number to validate EEPROM data
 const int MAX_WIFI_RETRY_ATTEMPTS = 20;                 // Maximum WiFi connection attempts
+
+// Circular Log Buffer Constants (Issue #24, #26, #27)
+const int LOG_BUFFER_SIZE = 500;                     // Maximum log entries in circular buffer (reduced for RAM)
+const String LOG_FILENAME = "/system.log";           // System log file on SD card
+const unsigned long HEALTH_CHECK_INTERVAL_MS = 60000; // Check system health every minute
+
 // includes --
 #include <vfs_api.h>
 #include <FSimpl.h>
@@ -267,6 +274,16 @@ struct WhatsAppMessageCache {
     unsigned long last_message_time = 0;
 };
 WhatsAppMessageCache whatsapp_cache;
+
+// Circular Log Buffer (Issue #24, #26, #27)
+struct LogEntry {
+    unsigned long timestamp;
+    String message;
+};
+LogEntry log_buffer[LOG_BUFFER_SIZE];
+int log_buffer_index = 0;
+int log_buffer_count = 0;
+unsigned long last_health_check = 0;
 
 //constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
 const char* host = "esp32";
@@ -935,6 +952,16 @@ void setup() {
         timerAlarmEnable(Timer0_Cfg);                                      // Enable the alarm
         console_print("Watchdog Timer Initialized - " + String(WDT_TiMEOUT) + " second timeout");
         digitalWrite(Blue_led_pin, LOW);
+        
+        // Log system information at startup (Issue #27 - Version Management)
+        console_print("=== SYSTEM STARTUP ===");
+        console_print("Version: " + version);
+        console_print("Build Date: " + String(__DATE__) + " " + String(__TIME__));
+        console_print("ESP32 Chip ID: " + String((uint32_t)ESP.getEfuseMac(), HEX));
+        console_print("SDK Version: " + String(ESP.getSdkVersion()));
+        log_system_health();
+        console_print("======================");
+        
         console_print("End of Setup");
         console_print("Running in Full Function Mode");
 } // end of Setup
@@ -956,6 +983,13 @@ void loop() {
         Get_Variable_Data();
     }
     Check_SD_Space();
+    
+    // Periodic system health logging and log file update (Issue #26)
+    if (millis() - last_health_check >= HEALTH_CHECK_INTERVAL_MS) {
+        last_health_check = millis();
+        log_system_health();
+        write_log_to_sd();  // Write circular buffer to SD card
+    }
 }
 //------------
 void Get_Variable_Data() {
@@ -1057,9 +1091,55 @@ void Check_NewMonth() {
         Current_Date_Time_Data.field.Year = New_Date_Time_Data.field.Year;
     }
 }
-void console_print(String Monitor_Message) {
-    console.print(millis(), DEC); console.println("\t" + Monitor_Message);
+// Circular log buffer functions (Issue #24, #26, #27)
+void add_to_log_buffer(String message) {
+    log_buffer[log_buffer_index].timestamp = millis();
+    log_buffer[log_buffer_index].message = message;
+    log_buffer_index = (log_buffer_index + 1) % LOG_BUFFER_SIZE;
+    if (log_buffer_count < LOG_BUFFER_SIZE) {
+        log_buffer_count++;
+    }
 }
+
+void write_log_to_sd() {
+    File logFile = SD.open(LOG_FILENAME, FILE_WRITE);
+    if (!logFile) {
+        return;  // Silently fail to avoid recursion
+    }
+    
+    // Calculate starting point for circular buffer
+    int start_index = (log_buffer_count < LOG_BUFFER_SIZE) ? 0 : log_buffer_index;
+    
+    // Write all log entries
+    for (int i = 0; i < log_buffer_count; i++) {
+        int idx = (start_index + i) % LOG_BUFFER_SIZE;
+        logFile.print(log_buffer[idx].timestamp);
+        logFile.print("\t");
+        logFile.println(log_buffer[idx].message);
+    }
+    
+    logFile.close();
+}
+
+void console_print(String Monitor_Message) {
+    console.print(millis(), DEC); 
+    console.println("\t" + Monitor_Message);
+    add_to_log_buffer(Monitor_Message);
+}
+
+// System health monitoring (Issue #26)
+void log_system_health() {
+    unsigned long free_heap = ESP.getFreeHeap();
+    unsigned long heap_size = ESP.getHeapSize();
+    unsigned long min_free_heap = ESP.getMinFreeHeap();
+    int heap_percent = (free_heap * 100) / heap_size;
+    
+    String health_msg = "HEALTH: Free=" + String(free_heap) + 
+                       " Min=" + String(min_free_heap) + 
+                       " (" + String(heap_percent) + "%)";
+    console_print(health_msg);
+}
+
 void Month_End_Process() {
     char ZipFileName[20];
     char month_end_file_month[3];

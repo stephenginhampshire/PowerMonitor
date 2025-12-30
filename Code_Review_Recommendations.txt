@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.35
-File: Power_Monitor.ino (2794 lines)
+Current Version: V12.36
+File: Power_Monitor.ino (2908 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -668,23 +668,53 @@ RELIABILITY
 ADDITIONAL RECOMMENDATIONS
 ================================================================================
 
-24. Add Logging Levels
+24. Add Logging Levels - FIXED (V12.36)
     Current: All messages printed via console_print()
     Recommendation: Implement severity levels (ERROR, WARNING, INFO, DEBUG)
+    
+    RESOLUTION:
+    - Implemented circular log buffer (500 entries)
+    - All console_print() messages automatically logged to buffer
+    - Timestamp (millis) + TAB + message format maintained
+    - Buffer written to SD card (/system.log) every minute
+    - Circular buffer prevents memory overflow
+    - Messages already include millisecond timestamps
+    
+    Note: DEBUG_ERROR, DEBUG_INFO, DEBUG_VERBOSE macros implemented in Issue #18
+          provide compile-time severity levels
 
 25. Implement Configuration File
     Create config.json on SD card for runtime configuration without recompile
 
-26. Add System Health Monitoring
+26. Add System Health Monitoring - FIXED (V12.36)
     Track and log:
     - Free heap memory over time
     - Stack usage
     - Task execution times
     - Error frequencies
+    
+    RESOLUTION:
+    - Implemented log_system_health() function
+    - Logs every 60 seconds automatically
+    - Tracks: Free heap, heap size, minimum free heap, heap percentage
+    - Format: "HEALTH: Free=XXX Min=XXX (XX%)"
+    - Logged at system startup
+    - Logged periodically in main loop
+    - Available for troubleshooting memory issues
 
-27. Version Management
+27. Version Management - FIXED (V12.36)
     Consider semantic versioning (MAJOR.MINOR.PATCH)
     Log version to SD card on boot for troubleshooting
+    
+    RESOLUTION:
+    - Version logged at system startup
+    - Includes build date and time (__DATE__, __TIME__)
+    - Logs ESP32 Chip ID
+    - Logs SDK version
+    - System health logged at startup
+    - All startup info preserved in circular log buffer
+    - Written to system.log file on SD card
+    - Useful for post-mortem analysis after reboots
 
 28. Documentation
     Add function-level comments explaining:
