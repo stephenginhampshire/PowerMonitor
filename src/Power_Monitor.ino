@@ -126,8 +126,8 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
 #define VERSION_MINOR 0   // Backwards-compatible functionality additions
-#define VERSION_PATCH 2   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.0.2"
+#define VERSION_PATCH 3   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.0.3"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -338,6 +338,8 @@ struct RuntimeConfig {
     unsigned long main_cycle_ms = 5000;
     unsigned long weather_update_ms = 600000;
     unsigned long health_check_ms = 60000;
+    String ota_username = "admin";  // OTA firmware update login
+    String ota_password = "admin";  // OTA firmware update password
 };
 RuntimeConfig config;
 
@@ -643,47 +645,44 @@ unsigned long Last_Time_Update = 0;
 // Debug / Test Variables ---
 bool Once = false;
 // --- Firware Update Pages
-const char* loginIndex = {
-    "<form name = 'loginForm'>"
-        "<table width='20%' bgcolor='A09F9F' align='center'>"
-            "<tr>"
-                "<td colspan=2>"
-                    "<center><font size=4><b>Power Monitor Firmware Update Login</b></font></center>"
-                    "<br>"
-                "</td>"
-                "<br>"
-                "<br>"
-            "</tr>"
-            "<tr>"
-                "<td>Username:</td>"
-                "<td><input type='text' size=25 name='userid'><br></td>"
-            "</tr>"
-            "<br>"
-            "<br>"
-            "<tr>"
-                "<td>Password:</td>"
-                "<td><input type='Password' size=25 name='pwd'><br></td>"
-                "<br>"
-                "<br>"
-            "</tr>"
-            "<tr>"
-                "<td><input type='submit' onclick='check(this.form)' value='Login'></td>"
-            "</tr>"
-        "</table>"
-    "</form>"
-    "<script>"
-        "function check(form)"
-        "{"
-        "if(form.userid.value=='W00dle1gh' && form.pwd.value=='W00dle1gh')"
-        "{"
-        "window.open('/serverIndex')"
-        "}"
-        "else"
-        "{"
-        " alert('Error Password or Username')"
-        "}"
-        "}"
-"</script>" };
+/**
+ * @brief Generate OTA firmware update login page with credentials from config
+ * 
+ * Creates an HTML login form for OTA firmware updates. Validates username and
+ * password against values loaded from config.json. On successful authentication,
+ * redirects to /serverIndex upload page.
+ * 
+ * @return HTML string containing login form with embedded JavaScript validation
+ * 
+ * @note Credentials are loaded from config.ota_username and config.ota_password
+ * @see load_config_from_sd(), serverIndex
+ */
+String get_loginIndex() {
+    String page = "<form name='loginForm'>";
+    page += "<table width='20%' bgcolor='A09F9F' align='center'>";
+    page += "<tr><td colspan=2>";
+    page += "<center><font size=4><b>Power Monitor Firmware Update Login</b></font></center>";
+    page += "<br></td><br><br></tr>";
+    page += "<tr><td>Username:</td>";
+    page += "<td><input type='text' size=25 name='userid'><br></td></tr>";
+    page += "<br><br>";
+    page += "<tr><td>Password:</td>";
+    page += "<td><input type='Password' size=25 name='pwd'><br></td>";
+    page += "<br><br></tr>";
+    page += "<tr><td><input type='submit' onclick='check(this.form)' value='Login'></td></tr>";
+    page += "</table></form>";
+    page += "<script>";
+    page += "function check(form) {";
+    page += "if(form.userid.value=='" + config.ota_username + "' && form.pwd.value=='" + config.ota_password + "') {";
+    page += "window.open('/serverIndex')";
+    page += "} else {";
+    page += "alert('Error Password or Username')";
+    page += "}";
+    page += "}";
+    page += "</script>";
+    return page;
+}
+
 const char* serverIndex = {
     "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
     "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
@@ -958,11 +957,33 @@ void setup() {
     server.begin();                             // Start Webserver
     console_print("Server Started");
     server.on("/", i_Display);
+    /**
+     * @brief OTA firmware update login endpoint
+     * 
+     * Serves the login page for OTA firmware updates. Credentials are validated
+     * client-side using JavaScript against values from config.json. Provides
+     * authentication before allowing access to firmware upload interface.
+     * 
+     * @note Route: GET /Firmware
+     * @note Credentials: config.ota_username and config.ota_password
+     * @see get_loginIndex(), /serverIndex
+     */
     server.on("/Firmware", HTTP_GET, []() {
         console_print("Firmware Upload Requested via Webpage");
         server.sendHeader("Connection", "close");
-        server.send(200, "text/html", loginIndex);
+        server.send(200, "text/html", get_loginIndex());
         });
+    /**
+     * @brief OTA firmware upload page endpoint
+     * 
+     * Serves the file selection and upload interface for OTA firmware updates.
+     * Accessed only after successful authentication at /Firmware. Uses jQuery
+     * for AJAX upload with progress indicator. POSTs firmware binary to /update.
+     * 
+     * @note Route: GET /serverIndex
+     * @note Upload target: POST /update
+     * @see serverIndex, /Firmware, /update
+     */
     server.on("/serverIndex", HTTP_GET, []() {
         console_print("Login Succeeded _ Firmware File Selection Requested via Webpage");
         server.sendHeader("Connection", "close");
@@ -978,6 +999,24 @@ void setup() {
     server.on("/ConfirmDeletePreviousMonth", i_Confirm_Delete_Previous_Month);  // confirm bulk delete
     server.on("/Reset", i_Web_Reset);               // reset the processor from the webpage
     server.on("/WhatsApp", i_WhatsApp);             // send a test Whatsapp message from the webpage
+    /**
+     * @brief OTA firmware update handler endpoint
+     * 
+     * Processes uploaded firmware binary and flashes ESP32 over-the-air. Handles
+     * multi-part upload in chunks using Arduino Update library. Validates firmware,
+     * writes to flash, and automatically reboots on success. Reports FAIL/OK status.
+     * 
+     * Upload lifecycle:
+     * 1. UPLOAD_FILE_START: Initialize Update with unknown size
+     * 2. UPLOAD_FILE_WRITE: Write chunks to flash progressively
+     * 3. UPLOAD_FILE_END: Finalize update, verify integrity, reboot
+     * 
+     * @note Route: POST /update
+     * @note Content-Type: multipart/form-data
+     * @note Auto-reboots on success
+     * @note Prints errors to Serial on failure
+     * @see Update.h, /Firmware, /serverIndex
+     */
     server.on("/update", HTTP_POST, []() {
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
@@ -1469,6 +1508,7 @@ void log_system_health() {
  * - WhatsApp: enable flag
  * - Debug: level (0-3)
  * - Intervals: main_cycle_ms, weather_update_ms, health_check_ms
+ * - OTA: username, password for firmware updates
  * 
  * @note File format: JSON with standard formatting
  * @note File location: /config.json on SD card root
@@ -1495,7 +1535,9 @@ void create_default_config() {
     configFile.println("  \"debug_level\": 2,");
     configFile.println("  \"main_cycle_ms\": 5000,");
     configFile.println("  \"weather_update_ms\": 600000,");
-    configFile.println("  \"health_check_ms\": 60000");
+    configFile.println("  \"health_check_ms\": 60000,");
+    configFile.println("  \"ota_username\": \"admin\",");
+    configFile.println("  \"ota_password\": \"admin\"");
     configFile.println("}");
     
     configFile.close();
@@ -1519,6 +1561,7 @@ void create_default_config() {
  * - main_cycle_ms: Main loop interval (default 5000)
  * - weather_update_ms: Weather API interval (default 600000)
  * - health_check_ms: Health monitoring interval (default 60000)
+ * - ota_username, ota_password: OTA firmware update credentials
  * 
  * @return true if config loaded successfully, false if file missing (default created)
  * 
@@ -1594,6 +1637,16 @@ bool load_config_from_sd() {
             int start = line.indexOf(":") + 1;
             config.health_check_ms = line.substring(start).toInt();
         }
+        else if (line.indexOf("ota_username") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.ota_username = line.substring(start, end);
+        }
+        else if (line.indexOf("ota_password") >= 0) {
+            int start = line.indexOf("\"", line.indexOf(":")) + 1;
+            int end = line.indexOf("\"", start);
+            config.ota_password = line.substring(start, end);
+        }
     }
     
     configFile.close();
@@ -1606,6 +1659,7 @@ bool load_config_from_sd() {
     console_print("  WhatsApp Enabled: " + String(config.whatsapp_enabled ? "Yes" : "No"));
     console_print("  Debug Level: " + String(config.debug_level));
     console_print("  Main Cycle: " + String(config.main_cycle_ms) + "ms");
+    console_print("  OTA Username: " + config.ota_username);
     
     return true;
 }
