@@ -60,6 +60,7 @@ Change Record
 30/12/2025  12.31 Blocking delays eliminated (Issue #19) - Replaced blocking delay() calls with non-blocking patterns to maintain system responsiveness
 30/12/2025  12.32 RS485 communication improved (Issue #20) - Added yield() to RS485 receive loop allowing WiFi stack and background tasks during sensor reads
 30/12/2025  12.33 WiFi recovery enhanced (Issue #21) - Implemented exponential backoff, WiFi radio restart, disconnect reason logging for robust recovery
+30/12/2025  12.34 File write verification added (Issue #22) - All SD card write operations now verified to detect silent failures and ensure data integrity
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -79,7 +80,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.33";
+String version = "V12.34";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -712,6 +713,16 @@ void smartDelay(unsigned long ms) {
     }
 }
 
+// File write verification helper (Issue #22 - File Operations Lack Verification)
+// Verifies that write operations succeed and logs errors
+bool verifyFileWrite(File &file, const String &filename, size_t bytesWritten, const String &operation) {
+    if (bytesWritten == 0) {
+        DEBUG_ERROR("Write verification failed for " + filename + " during " + operation);
+        return false;
+    }
+    return true;
+}
+
 void setup() {
     console.begin(console_Baudrate);                                        // enable the console
     while (!console);                                                       // wait for port to settle
@@ -1237,29 +1248,65 @@ void Write_New_Data_Record_to_Data_Files() {
         ESP.restart();
     }
     console_print("New Data Record Written to " + DataFileName);
-    DataFile.print(Current_Data_Record.field.ldate); DataFile.print(",");               // [00] Date
-    DataFile.print(Current_Data_Record.field.ltime); DataFile.print(",");               // [01] Time
-    DataFile.print(Current_Data_Record.field.Voltage); DataFile.print(",");             // [02] Voltage
-    DataFile.print(Current_Data_Record.field.Amperage); DataFile.print(",");            // [03] Amperage
-    DataFile.print(Current_Data_Record.field.wattage); DataFile.print(",");             // [04] Wattage
-    DataFile.print(Current_Data_Record.field.uptime); DataFile.print(",");              // [05] UpTime
-    DataFile.print(Current_Data_Record.field.kilowatthour); DataFile.print(",");        // [06] Kiliowatthour
-    DataFile.print(Current_Data_Record.field.powerfactor); DataFile.print(",");         // [07] Power Factor
-    DataFile.print(Current_Data_Record.field.frequency); DataFile.print(",");           // [08] Frequency
-    DataFile.print(Current_Data_Record.field.sensor_temperature); DataFile.print(",");  // [09] Sensor Temperature
-    DataFile.print(Current_Data_Record.field.weather_temperature); DataFile.print(","); // [10] Weather Temperature
-    DataFile.print(Current_Data_Record.field.temperature_feels_like); DataFile.print(",");// [11] Temp Feels Like
-    DataFile.print(Current_Data_Record.field.temperature_maximum); DataFile.print(","); // [12] Temperature Maximum
-    DataFile.print(Current_Data_Record.field.temperature_minimum); DataFile.print(","); // [13] Temperature Minimum
-    DataFile.print(Current_Data_Record.field.atmospheric_pressure); DataFile.print(",");// [14] Atmos Pressure
-    DataFile.print(Current_Data_Record.field.relative_humidity); DataFile.print(",");   // [15] Relative Humidity
-    DataFile.print(Current_Data_Record.field.wind_speed); DataFile.print(",");          // [16] Wind Speed
-    DataFile.print(Current_Data_Record.field.wind_direction); DataFile.print(",");      // [17] Wind Direction
-    DataFile.print(Current_Data_Record.field.gas_volume); DataFile.print(",");          // [18] Gas Volume
-    DataFile.print(Current_Data_Record.field.weather_description);                      // [19] Weather Description
-    DataFile.println();                                                                 // end of record
-    DataFile.close();                                                                   // close the sd file
-    DataFile.flush();                                                        // make sure it has been written to SD
+    
+    // Write data record with verification (Issue #22 - File Operations Lack Verification)
+    size_t written = 0;
+    bool write_success = true;
+    
+    written = DataFile.print(Current_Data_Record.field.ldate);
+    write_success &= verifyFileWrite(DataFile, DataFileName, written, "date");
+    written = DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.ltime);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.Voltage);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.Amperage);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.wattage);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.uptime);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.kilowatthour);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.powerfactor);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.frequency);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.sensor_temperature);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.weather_temperature);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.temperature_feels_like);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.temperature_maximum);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.temperature_minimum);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.atmospheric_pressure);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.relative_humidity);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.wind_speed);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.wind_direction);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.gas_volume);
+    written += DataFile.print(",");
+    written += DataFile.print(Current_Data_Record.field.weather_description);
+    written += DataFile.println();
+    
+    write_success &= verifyFileWrite(DataFile, DataFileName, written, "data record");
+    
+    if (!write_success) {
+        DEBUG_ERROR("Data record write verification failed for " + DataFileName);
+        DataFile.close();
+        Send_WhatsApp_Message("Power Monitor - Data write verification failed - " + DataFileName);
+        smartDelay(2000);
+        ESP.restart();
+    }
+    
+    DataFile.close();
+    DataFile.flush();
     Data_Record_Count++;                                                      // increment the current record count
     if (Current_Data_Record.field.Voltage >= Highest_Voltage || Highest_Voltage == 0) {
         Date_of_Highest_Voltage = Current_Data_Record.field.ldate;
@@ -1363,11 +1410,23 @@ void Create_or_Open_New_Data_File() {
             ESP.restart();
         }
         console_print("Day Data File " + DataFileName + " created");
-        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {                // write data column headings into the SD file
-            DataFile.print(Column_Field_Names[x]);
-            DataFile.print(",");
+        
+        // Write column headings with verification (Issue #22 - File Operations Lack Verification)
+        size_t header_written = 0;
+        for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {
+            header_written += DataFile.print(Column_Field_Names[x]);
+            header_written += DataFile.print(",");
         }
-        DataFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
+        header_written += DataFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
+        
+        if (!verifyFileWrite(DataFile, DataFileName, header_written, "column headers")) {
+            DEBUG_ERROR("Column header write verification failed for " + DataFileName);
+            DataFile.close();
+            Send_WhatsApp_Message("Power Monitor - Header write failed - " + DataFileName);
+            smartDelay(2000);
+            ESP.restart();
+        }
+        
         console_print("Column Headings written to Day Data File");
         DataFile.close();
         DataFile.flush();

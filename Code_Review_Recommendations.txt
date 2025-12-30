@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.33
-File: Power_Monitor.ino (2709 lines)
+Current Version: V12.34
+File: Power_Monitor.ino (2751 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -571,23 +571,50 @@ RELIABILITY
     - Better logging for post-mortem analysis
     - Automatic recovery without manual intervention
 
-22. File Operations Lack Verification
+22. File Operations Lack Verification - FIXED (V12.34)
     Examples: Lines 920, 938, 807
     Issue: File open/write operations assumed successful
            No verification of bytes written
     
-    Recommendation: Always check return values:
-                    File f = SD.open(filename, FILE_WRITE);
-                    if (!f) {
-                        console_print("Failed to open " + filename);
-                        return false;
-                    }
-                    size_t written = f.println(data);
-                    if (written == 0) {
-                        console_print("Write failed");
-                        f.close();
-                        return false;
-                    }
+    RESOLUTION:
+    - Created verifyFileWrite() helper function:
+      * Takes file reference, filename, bytes written, and operation name
+      * Returns true if bytes written > 0
+      * Logs error with DEBUG_ERROR on failure
+      * Reusable across all file operations
+    
+    - Added verification to Write_New_Data_Record_to_Data_Files():
+      * Accumulates bytes written for entire data record
+      * Verifies each write operation succeeds
+      * Closes file and reboots on verification failure
+      * Sends WhatsApp notification of write failure
+    
+    - Added verification to Create_or_Open_New_Data_File():
+      * Verifies column header write succeeds
+      * Accumulates header write byte count
+      * Detects silent SD card failures during file creation
+      * Prevents files with missing/corrupted headers
+    
+    - Write verification strategy:
+      * Check return value from print/println operations
+      * Accumulate total bytes written
+      * Verify non-zero bytes written
+      * Log specific operation that failed
+      * Trigger system restart on failure (prevents data loss)
+    
+    Results:
+    - Detects SD card write failures immediately
+    - Prevents silent data loss
+    - Identifies failing SD cards or filesystem issues
+    - Better diagnostic information (which operation failed)
+    - System restarts cleanly on persistent write failures
+    
+    Benefits:
+    - Data integrity guaranteed (writes verified or system restarts)
+    - Early detection of SD card hardware failures
+    - Prevents accumulation of corrupted data
+    - User notification via WhatsApp on write failures
+    - Increased confidence in data logging reliability
 
 23. Date/Time Validation Minimal
     Location: Update_Current_Timeinfo() (Line 2068)
