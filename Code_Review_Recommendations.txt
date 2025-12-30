@@ -3,8 +3,8 @@ POWER MONITOR CODE REVIEW - RECOMMENDATIONS FOR IMPROVEMENT
 ================================================================================
 Date: December 30, 2025
 Version Reviewed: V12.17
-Current Version: V12.28
-File: Power_Monitor.ino (2590 lines)
+Current Version: V12.29
+File: Power_Monitor.ino (2591 lines)
 
 ================================================================================
 CRITICAL ISSUES
@@ -385,15 +385,24 @@ CODE STRUCTURE
                         webpage += "<p style='...'>" + label + ": " + value + "</p>";
                     }
 
-17. Missing Header Guards
-    Files: Configuration.h, KWS_Protocol.h (assumed)
-    Issue: No include guards to prevent multiple inclusion
+17. Missing Header Guards - FIXED (V12.29)
+    Files: Configuration.h, KWS_Protocol.h
+    Issue: Only #pragma once directive, missing traditional guards for maximum portability
     
-    Recommendation: Add to all header files:
-                    #ifndef CONFIGURATION_H
-                    #define CONFIGURATION_H
-                    // ... header content ...
-                    #endif
+    RESOLUTION:
+    - Added traditional header guards to both files:
+      * Configuration.h: #ifndef CONFIGURATION_H / #define CONFIGURATION_H / #endif
+      * KWS_Protocol.h: #ifndef KWS_PROTOCOL_H / #define KWS_PROTOCOL_H / #endif
+    - Retained #pragma once for compilers that support it (best of both worlds)
+    - Prevents multiple inclusion issues on all compilers
+    - Zero runtime overhead, compile-time only
+    
+    Results:
+    - Maximum portability across all C++ compilers
+    - Dual protection: #pragma once (fast) + traditional guards (universal)
+    - No impact on binary size or performance
+    
+    Recommendation: Use both #pragma once and traditional guards for all future headers
 
 18. Inconsistent Debug Output
     Issue: Mix of commented debug code and preprocessor directives

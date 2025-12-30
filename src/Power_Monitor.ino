@@ -55,6 +55,7 @@ Change Record
 30/12/2025  12.26 Gas volume persistence - saves to EEPROM every 0.1m³ change, survives reboots with validation
 30/12/2025  12.27 Long function refactoring (Issue #15) - Prefill_Data_Array() reduced from 326 lines to ~90 lines by extracting CSV parsing into reusable helper functions
 30/12/2025  12.28 Code duplication eliminated (Issue #16) - Created toggleLED() helper function, replaced 4 instances of digitalWrite(pin, !digitalRead(pin))
+30/12/2025  12.29 Header guards added (Issue #17) - Added traditional #ifndef/#define/#endif guards to Configuration.h and KWS_Protocol.h for maximum portability
 */
 // ---- Zip Libraries - TEMPORARILY DISABLED (Issue #11: ZIP implementation incomplete) ----
 // #include <mz_zip_rw.h>
@@ -74,7 +75,7 @@ Change Record
 // #include <mz_os.h>
 // #include <mz_crypt.h>
 // #include <mz.h>
-String version = "V12.28";
+String version = "V12.29";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES

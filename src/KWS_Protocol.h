@@ -1,3 +1,6 @@
+#ifndef KWS_PROTOCOL_H
+#define KWS_PROTOCOL_H
+
 #pragma once
 //Test code to see if I can get the KWS-AC301L-100A power meter to respond to a MODBUS master quarry.
 
@@ -449,3 +452,5 @@ byte ModRTU_CRC_check(byte message[], byte result[]) {           //returns byte 
     Serial.print(lowByte(crc), HEX);
     Serial.println(highByte(crc), HEX);
 }
+
+#endif // KWS_PROTOCOL_H
