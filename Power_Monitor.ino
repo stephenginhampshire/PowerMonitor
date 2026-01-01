@@ -1,4 +1,4 @@
-/*------------
+﻿/*------------
 Name:		Power_Monitor.ino
 Created : 9 / 10 / 2022 12 : 54 : 46 PM
 Author : Stephen Gould
@@ -43,8 +43,26 @@ Change Record
 28/10/2023  12.14 Command added to send a test whatsapp message, and IP Hostname customized.
 01/11/2023  12.15 Kilowatt hour value on Information corrected
 06/01/2024  12.16 Whatsapp message now sent on reboot, Time added to Standard_Format_Date_Time
+05/03/2025  12.17 Month end file creation replaced with Zip file creation
 */
-String version = "V12.16";
+#include <mz_zip_rw.h>
+#include <mz_zip.h>
+#include <mz_strm_zstd.h>
+#include <mz_strm_zlib.h>
+#include <mz_strm_wzaes.h>
+#include <mz_strm_split.h>
+#include <mz_strm_pkcrypt.h>
+#include <mz_strm_os.h>
+#include <mz_strm_mem.h>
+#include <mz_strm_lzma.h>
+#include <mz_strm_libcomp.h>
+#include <mz_strm_bzip.h>
+#include <mz_strm_buf.h>
+#include <mz_strm.h>
+#include <mz_os.h>
+#include <mz_crypt.h>
+#include <mz.h>
+String version = "V12.17";
 // compiler directives ------
 //#define PRiNT_PREFiLL_DATA_VALUES       //
 //#define PRiNT_SHUFFLiNG_DATA_VALUES
@@ -77,16 +95,21 @@ String version = "V12.16";
 #include <ESPmDNS.h>
 #include <UrlEncode.h>
 // -----------
-constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
+//constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
 const char* host = "esp32";
-const char* ssid = "Woodleigh";
-const char* password = "2008198399";
+const char* SSID = "Woodleigh";
+const char* Password = "2008198399";
+const char* NtpServer = "pool.ntp.org";
+const char Weather_City[] = { "Basingstoke\0" };
+const char Weather_Region[] = { "uk\0" };
+bool Weather_Enabled = true;
+bool WhatsApp_Enabled = true;
+//bool WhatsApp_Debug = true;
+//String WhatsApp_url_1 = "https://api.callmebot.com/whatsapp.php?phone=+447785938200&text=";
+//String WhatsApp_url_2 = "&apikey=8876034";
 String hostname = "Power Monitor " + version;
-const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 3600;                         // offset for the date and time function
-const char city[] = { "Basingstoke\0" };
-const char region[] = { "uk\0" };
 const String WiFi_Status_Message[7] = {
                     "WL_iDLE_STATUS",   // temporary status assigned when WiFi.begin() is called
                     "WL_NO_SSiD_AVAiL", // when no SSiD are available
@@ -148,6 +171,8 @@ String This_Date_Without = "19511116";
 String This_Time_With = "00:00:00";
 String This_Time_Without = "000000";
 String Standard_Format_Date_Time = "          ";
+unsigned long WhatsApp_Time = 0;                                // ensure we do not double send Whatsapp messages
+unsigned long Reset_Time = 0;
 constexpr int Days_n_Month[13][2] = {
     // Leap,Normal
             {00,00},
@@ -231,8 +256,10 @@ Data_Record_Union Current_Data_Record;
 Data_Record_Union Concatenation_Data_Record;
 // Data Table ---------------------------------------------------------------------------------------------------------
 int Data_Table_Pointer = 0;          // points to the next index of Data_Table
+//int Month_Table_Pointer = 0;
 int Data_Record_Count = 0;           // running total of records written to Data Table
 constexpr char Data_Table_Size = 60;
+constexpr int Month_Table_Size = (24 * 31);
 struct Data_Table_Record {
     char ldate[11];                 //  [0 - 10]  date record was taken
     char ltime[9];                  //  [11 - 19]  time record was taken
@@ -261,15 +288,12 @@ union Data_Table_Union {
     unsigned int characters[Data_Table_Record_Length];
 };
 Data_Table_Union Readings_Table[Data_Table_Size];
+int Wattage_Readings_Count = 0;
 /// ConcatenationFile Constants and Variables -------------
-File ConcatenationFile;
-String ConcatenationFileName = "M202301";       // .cvs
-int Concatenation_Data_Record_Count = 0;
-File SourceDataFile;
-String SourceFileName = "19511118.csv";
+String ZipFileName = "M202501";                     // file name of the created zip file (all the previous months dailt files, ready to be downloaded
 bool Month_End_Process_Status = false;
 String Month_End_Process_Started = "1951/11/18 20:00";
-long Month_End_Records_Processed = 0;
+constexpr int Chunk_Size = 512;
 // KWS Request Field Numbers 
 constexpr int Request_Voltage = 0;
 constexpr int Request_Amperage = 1;
@@ -292,7 +316,7 @@ constexpr byte RS485_Requests[Number_of_RS485_Requests + 1][8] = {
                         {0x02,0x03,0x00,0x1E,0x00,0x01,0xE4,0x3F},// [6]  Request Hertz, in tenths of a hertz
                         {0x02,0x03,0x00,0x1A,0x00,0x01,0xA5,0xFE},// [7]  Request temperature, in degrees centigrade
 };
-String FileNames[50];
+String FileNames[200];
 bool Yellow_Switch_Pressed = false;
 bool Green_Switch_Pressed = false;
 bool Blue_Switch_Pressed = false;
@@ -315,7 +339,6 @@ String Date_of_Highest_Voltage = "0000/00/00";
 double Highest_Amperage = 0;
 String Time_of_Highest_Amperage = "00:00:00";
 String Date_of_Highest_Amperage = "0000/00/00";
-//double Cumulative_kwh = 0;
 String Time_of_Latest_reading = "00:00:00";
 double Latest_weather_temperature = 0;
 double Latest_weather_temperature_feels_like = 0;
@@ -357,7 +380,7 @@ typedef struct {
 weather_record_type Weather_Record;
 unsigned long Last_Cycle = 0;
 unsigned long Last_Weather_Read = 0;
-uint64_t SD_freespace = 0;
+unsigned long SD_freespace = 0;
 constexpr double Critical_SD_Freespace = 1;                     // bottom limit of SD space in MB
 double SD_freespace_double = 0;
 String Temp_Message;
@@ -481,10 +504,9 @@ void setup() {
     // WiFi and Web Setup -------------
     console_print("WiFi Configuration Commenced");
     WiFi.mode(WIFI_STA);
-    //    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
-    WiFi.setHostname(hostname.c_str()); //define hostname
-    StartWiFi(ssid, password);                  // Start WiFi
-    initTime("GMT0BST,M3.5.0/1,M10.5.0");   // initialise the Time library to London, GMT0BST,M3.5.0/1,M10.5.0
+    WiFi.setHostname(hostname.c_str());         //define hostname
+    StartWiFi(SSID, Password);                  // Start WiFi
+    initTime("GMT0BST,M3.5.0/1,M10.5.0");       // initialise Time library to London, GMT0BST,M3.5.0/1,M10.5.0
     console_print("Starting Server");
     server.begin();                             // Start Webserver
     console_print("Server Started");
@@ -534,79 +556,84 @@ void setup() {
                 }
             }
             });
-    console_print("Starting Server");
-    server.begin();                             // Start Webserver
-    console_print("Server Started");
-    RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_Rx_pin, RS485_Tx_pin);
-    pinMode(RS485_Enable_pin, OUTPUT);
-    delay(10);
-    console_print("SD Configuration Commenced");
-    if (!SD.begin(SS_pin)) {
-        console_print("SD Drive Begin Failed");
-        while (true) {
-            Check_Red_Switch("SD Drive Begin Failed");
-        }
-    }
-    else {
-        console_print("SD Drive Begin Succeeded");
-        uint8_t cardType = SD.cardType();
-        while (SD.cardType() == CARD_NONE) {
-            console_print("No SD Card Found");
-            Check_Red_Switch("No SD Card Found");
-        }
-        String card;
-        if (cardType == CARD_MMC) {
-            card = "MMC";
-        }
-        else if (cardType == CARD_SD) {
-            card = "SDSC";
-        }
-        else if (cardType == CARD_SDHC) {
-            card = "SDH//C";
-        }
-        else {
-            card = "UNKNOWN";
-        }
-        console_print("SD Card Type: " + card);
-        uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-        console_print("SD Card Size : " + String(cardSize) + "MBytes");
-        console_print("SD Total Bytes : " + String(SD.totalBytes()));
-        console_print("SD Used bytes : " + String(SD.usedBytes()));
-        console_print("SD Card initialisation Complete");
-    }
-    console_print("SD Configuration Complete");
-    console_print("Date and Time Update");
-    Update_Current_Timeinfo();                                              // update This date time info, no /s
-    console_print("Setting Previous Date and Time to Today Date and Time");
-    Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;
-    Current_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month;
-    Last_Boot_Time_With = Current_Time_With;
-    Last_Boot_Date_With = Current_Date_With;
-    This_Date_With = Current_Date_With;
-    This_Time_With = Current_Time_With;
-    Create_or_Open_New_Data_File();
-    console_print("Preparing Customised Weather Request");
-    int count = 0;
-    for (int x = 0; x <= 120; x++) {
-        if (incomplete_Weather_Api_Link[x] == '\0') break;
-        if (incomplete_Weather_Api_Link[x] != '#') {
-            Complete_Weather_Api_Link[count] = incomplete_Weather_Api_Link[x];
-            count++;
-        }
-        else {
-            for (int y = 0; y < strlen(city); y++) {
-                Complete_Weather_Api_Link[count++] = city[y];
-            }
-            Complete_Weather_Api_Link[count++] = ',';
-            for (int y = 0; y < strlen(region); y++) {
-                Complete_Weather_Api_Link[count++] = region[y];
+        console_print("Starting Server");
+        server.begin();                             // Start Webserver
+        console_print("Server Started");
+        RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_Rx_pin, RS485_Tx_pin);
+        pinMode(RS485_Enable_pin, OUTPUT);
+        delay(10);
+        console_print("SD Configuration Commenced");
+        if (!SD.begin(SS_pin)) {
+            console_print("SD Drive Begin Failed");
+            while (true) {
+                Check_Red_Switch("SD Drive Begin Failed");
             }
         }
-    }
-    console_print("Weather Request Created: " + String(Complete_Weather_Api_Link));
-    digitalWrite(Blue_led_pin, LOW);
-    console_print("End of Setup");
-    console_print("Running in Full Function Mode");
+        else {
+            console_print("SD Drive Begin Succeeded");
+            char cardType = SD.cardType();
+            while (SD.cardType() == CARD_NONE) {
+                console_print("No SD Card Found");
+                Check_Red_Switch("No SD Card Found");
+            }
+            String card;
+            if (cardType == CARD_MMC) {
+                card = "MMC";
+            }
+            else if (cardType == CARD_SD) {
+                card = "SDSC";
+            }
+            else if (cardType == CARD_SDHC) {
+                card = "SDH//C";
+            }
+            else {
+                card = "UNKNOWN";
+            }
+            console_print("SD Card Type: " + card);
+            unsigned long cardSize = SD.cardSize() / (1024 * 1024);
+            console_print("SD Card Size : " + String(cardSize) + "MBytes");
+            console_print("SD Total Bytes : " + String(SD.totalBytes()));
+            console_print("SD Used bytes : " + String(SD.usedBytes()));
+            console_print("SD Card initialisation Complete");
+        }
+        console_print("SD Configuration Complete");
+        console_print("Date and Time Update");
+        Update_Current_Timeinfo();                                              // update This date time info, no /s
+        console_print("Setting Previous Date and Time to Today Date and Time");
+        Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;
+        Current_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month;
+        Last_Boot_Time_With = Current_Time_With;
+        Last_Boot_Date_With = Current_Date_With;
+        This_Date_With = Current_Date_With;
+        This_Time_With = Current_Time_With;
+        Create_or_Open_New_Data_File();
+        if (Weather_Enabled) {
+            console_print("Preparing Customised Weather Request");
+            int count = 0;
+            for (int x = 0; x <= 120; x++) {
+                if (incomplete_Weather_Api_Link[x] == '\0') break;
+                if (incomplete_Weather_Api_Link[x] != '#') {
+                    Complete_Weather_Api_Link[count] = incomplete_Weather_Api_Link[x];
+                    count++;
+                }
+                else {
+                    for (int y = 0; y < strlen(Weather_City); y++) {
+                        Complete_Weather_Api_Link[count++] = Weather_City[y];
+                    }
+                    Complete_Weather_Api_Link[count++] = ',';
+                    for (int y = 0; y < strlen(Weather_Region); y++) {
+                        Complete_Weather_Api_Link[count++] = Weather_Region[y];
+                    }
+                }
+            }
+            console_print("Weather Request Created: " + String(Complete_Weather_Api_Link));
+        }
+        else {
+            console_print("Weather not Enabled");
+        }
+        digitalWrite(Blue_led_pin, LOW);
+        console_print("End of Setup");
+        console_print("Running in Full Function Mode");
 } // end of Setup
 //------------
 void loop() {
@@ -616,47 +643,50 @@ void loop() {
         digitalWrite(Green_led_pin, HIGH);
         Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
     }
-    Check_WiFi();                                                          // check that the WiFi is still connected
+    Check_WiFi();                                                   // check that the WiFi is still connected
     Check_Blue_Switch(false);
-    Check_Gas_Switch();                                              // check if the gas switch sense pin has risen
-    Check_NewDay();                                                                // check if the date has changed
-    server.handleClient();                                                  // handle any messages from the website
-    if (millis() > Last_Cycle + (unsigned long)5000) {          // send requests every 5 seconds (5000 millisecods)
-        Get_Sensor_Data();
+    Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
+    Check_NewDay();                                                 // check if the date has changed
+    server.handleClient();                                          // handle any messages from the website
+    if (millis() > Last_Cycle + (unsigned long)5000) {              // send requests every 5 seconds (5000 millisecods)
+        Get_Variable_Data();
     }
     Check_SD_Space();
 }
 //------------
-void Get_Sensor_Data() {
-    //   console_print("Requesting Current Sensor and Weather information");
-    Last_Cycle = millis();                                             // update the last read milli second reading
-    // weather information request start ---
+void Get_Variable_Data() {
+    Last_Cycle = millis();
+    Get_Weather();
+    Get_Sensor();
+    Update_Current_Timeinfo();
+    Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
+    Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
+    Write_New_Data_Record_to_Data_Files();             // write the new record to SD Drive
+    Add_New_Data_Record_to_Display_Table();           // add the record to the display table
+}
+void Get_Sensor() {
+    for (int i = 0; i <= Number_of_RS485_Requests; i++) {     // transmit the requests, assembling the Values array
+        Send_Request(i);                                            // send the RS485 Port the requests, one by one
+        Receive(i);                                                                    // receive the sensor output
+    }                                                                         // all values should now be populated
+}
+void Get_Weather() {
+    Update_Current_Timeinfo();
     HTTPClient http;
-    http.begin(Complete_Weather_Api_Link);                                           // start the weather connectio
+    http.begin(Complete_Weather_Api_Link);                                          // start the weather connection
     int httpCode = http.GET();                                                                  // send the request
     if (httpCode > 0) {
         if (httpCode == HTTP_CODE_OK) {
             String payload = http.getString();
             Parse_Weather_info(payload);
+            //           console_print("Weather Information Obtained :" + String(Current_Data_Record.field.weather_description));
         }
         else {
             console_print("Obtaining Weather information Failed, Return code: " + String(httpCode));
         }
         http.end();
     }
-    // weather information request end -----
-    // sensor information request start ----
-    for (int i = 0; i <= Number_of_RS485_Requests; i++) {     // transmit the requests, assembling the Values array
-        Send_Request(i);                                            // send the RS485 Port the requests, one by one
-        Receive(i);                                                                    // receive the sensor output
-    }                                                                         // all values should now be populated
-// sensor information request end ------
-    Update_Current_Timeinfo();
-    Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
-    Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
-    Write_New_Data_Record_to_Data_File();                                       // write the new record to SD Drive
-    Add_New_Data_Record_to_Display_Table();                                  // add the record to the display table
-}// end of if millis >5000
+}
 void Check_NewDay() {
     Update_Current_Timeinfo();                                                      // update the Today_Date and Time
     if ((New_Date_Time_Data.field.Day != Current_Date_Time_Data.field.Day)) {       // is the day different to previous day
@@ -691,323 +721,85 @@ void console_print(String Monitor_Message) {
     console.print(millis(), DEC); console.println("\t" + Monitor_Message);
 }
 void Month_End_Process() {
-    int month_datatemp = 0;
-    char month_field[50];
-    int month_character_count = 0;
-    int month_data_field_number = 0;
-    int file_count = 0;
-    int csv_count = 0;
-    String month_end_file_month = "00";
+    char ZipFileName[20];
+    char month_end_file_month[3];
     String this_file_month = "00";
     console_print("Commencing Month End Process for Month " + String(Month_End_Date_Time_Data.field.Month));
     Send_WhatsApp_Message("Power Monitor - Month End Process Commenced for " + String(Month_Names[Month_End_Date_Time_Data.field.Month]));
     Month_End_Process_Status = true;
-    Month_End_Process_Started = Current_Date_With + " " + Current_Time_With;
-    ConcatenationFileName = "MF";                                               // "MF" - create the month file name
-    ConcatenationFileName += String(Month_End_Date_Time_Data.field.Year);       // "MF1951"
     if (Month_End_Date_Time_Data.field.Month < 10) {
-        month_end_file_month = "0" + String(Month_End_Date_Time_Data.field.Month);
+        snprintf(month_end_file_month, sizeof(month_end_file_month), "0%d", Month_End_Date_Time_Data.field.Month);
     }
     else {
-        month_end_file_month = String(Month_End_Date_Time_Data.field.Month);
+        snprintf(month_end_file_month, sizeof(month_end_file_month), "%d", Month_End_Date_Time_Data.field.Month);
     }
-    ConcatenationFileName += month_end_file_month + ".csm";                                            // "MF195111.csm"
-    console_print("Month End Stage 1. Create a Concatenation File - " + ConcatenationFileName);
-    if (SD.exists("/" + ConcatenationFileName)) {           // check if the monthly file exists, if so delete it
-        SD.remove("/" + ConcatenationFileName);
-        console_print("\tPrevious " + ConcatenationFileName + " deleted");
-    }
-    ConcatenationFile = SD.open("/" + ConcatenationFileName, FILE_WRITE);
-    if (!ConcatenationFile) {                    // log file not opened
-        console_print("Error opening Concatenation file (" + String(ConcatenationFileName) + ")");
-        Check_Red_Switch("Power Monitor - Error opening Concatenation file");
+    snprintf(ZipFileName, sizeof(ZipFileName), "MF%s.zip", month_end_file_month);    // Create the final zip filename
+    if (ZipAllFilesToSD(ZipFileName)) {
+        console_print("Month End Completed for Month " + String(Month_End_Date_Time_Data.field.Month));
+        Send_WhatsApp_Message("Power Monitor - Month End Process Completed for " + String(Month_Names[Month_End_Date_Time_Data.field.Month]));
     }
     else {
-        console_print("\tConcatenation File " + ConcatenationFileName + " created");
+        console_print("Month End Process Failed for Month " + String(Month_End_Date_Time_Data.field.Month));
+        Send_WhatsApp_Message("Power Monitor - Month End Process Failed for " + String(Month_Names[Month_End_Date_Time_Data.field.Month]));
     }
-    console_print("\tWriting column headings into Concatenation File");
-    for (int x = 0; x < Number_of_Column_Field_Names - 1; x++) {    // write data column headings into the SD file
-        ConcatenationFile.print(Column_Field_Names[x]);
-        ConcatenationFile.print(",");
+}
+bool ZipAllFilesToSD(const char* zipFilename) {
+    if (SD.exists(zipFilename)) {
+        console_print("Zip file already exists");
+        SD.remove(zipFilename);
     }
-    // write the column headings to the concatenation file
-    ConcatenationFile.println(Column_Field_Names[Number_of_Column_Field_Names - 1]);
-    console_print("\tColumn Titles written to new Concatenation File");
-    ConcatenationFile.close();
-    ConcatenationFile.flush();
-    console_print("\tConcatenation File Closed");
-    console_print("Stage 2. Create an array of the .csv files names");
-    file_count = Count_Files_on_SD_Drive();                                       // creates an array of filenames
-    console_print("\tThere are currently " + String(file_count) + " files on the SD Drive");
-    csv_count = 0;
-    console_print("\tLooking for .csv files with month of " + month_end_file_month);
-    for (int file = 0; file < file_count; file++) {                             // select .cvs file names from the month end month
-        //        console_print("Character at position 4 of file name = [" + String(FileNames[file].charAt(4)) + "]");
-        if (FileNames[file].indexOf(month_end_file_month) == 4) {               // MF1951xx.csv
-            //            console_print("\t\tFile Name: " + FileNames[file] + " contains the required month number in the correct position");
-            //            console_print("Character at position 8 of file name = [" + String(FileNames[file].charAt(8)) + "]");
-            if (FileNames[file].indexOf(".csv") == 8) {                         // 012345678select only ,csv files
-                //                console_print("\t\tFile Name " + FileNames[file] + " does have a .csv extension");
-                Csv_File_Names[csv_count] = "";
-                for (int x = 0; x < 8; x++) {
-                    Csv_File_Names[csv_count] += FileNames[file][x];          // move the filename, minus the extension
-                }
-                csv_count++;                                                  // increment the count of csv file names
+    void* zip_writer = mz_zip_writer_create();
+    if (zip_writer == NULL) {
+        Serial.println("ERROR: Failed to create ZIP writer!");
+        return false;
+    }
+    File root = SD.open("/");
+    while (true) {
+        File file = root.openNextFile();
+        if (!file) break;
+        console_print("Adding: " + String(file.name()));
+        if (!file.isDirectory()) {
+            if (mz_zip_writer_open_file(zip_writer, zipFilename, 0, 0) != MZ_OK) {
+                console_print("ERROR: Failed to add file to ZIP.");
+                mz_zip_writer_delete(&zip_writer);
+                return false;
             }
             else {
-                console_print("\tFile Name " + FileNames[file] + " does not have a .csv extension");
+                Serial.println("✔ File added successfully.");
             }
         }
-        else {
-            console_print("\tFile Name: " + FileNames[file] + " does not contain the required month number in the correct position");
-        }
+        file.close();
     }
-    if (!csv_count) {
-        console_print("Month End No relevant files found");
-        console_print("Month End Process Terminated");
-        Send_WhatsApp_Message("Power Monitor - Month End Process Terminated - No relevant files to concatenate, " + ConcatenationFileName + " Removed");
-        Month_End_Process_Status = false;
-        return;             // Abort the Month End Routine
+    if (mz_zip_writer_close(zip_writer) != MZ_OK) {
+
     }
-    console_print("\tThere are " + String(csv_count) + ".csv files");
-    console_print("\tSort the .csv file names into date order");
-    sortArray(Csv_File_Names, csv_count);         // sort into rising order
-    console_print("\tList the Sorted Files");
-    for (int x = 0; x < csv_count; x++) {
-        console_print("\t\tFile Name Found " + Csv_File_Names[x]);
-    }
-    console_print("\tEnd of Sorted File List");
-    console_print("Stage 3. Concatenating .csv files into " + ConcatenationFileName);
-    for (int file = 0; file < csv_count; file++) {                                            // for each csv file
-        ConcatenationFile = SD.open("/" + ConcatenationFileName, FILE_APPEND);    // open the month file for append
-        if (!ConcatenationFile) {                                                 // log file not opened
-            console_print("Error opening Concateation file (" + String(ConcatenationFileName) + ")");
-            Check_Red_Switch("Power Monitor - Error opening Concatenation File");
-        }
-        Concatenation_Data_Record_Count = 0;
-        SourceFileName = Csv_File_Names[file] + ".csv";
-        SourceDataFile = SD.open("/" + SourceFileName, FILE_READ);                            // open the data file
-        if (!SourceDataFile) {                                                               // log file not opened
-            console_print("Error opening Source file (" + String(SourceFileName) + ")");
-            Check_Red_Switch("Power Monitor - Error opening Source File");
-        }
-        else {
-            console_print("\tMonth End - Processing " + SourceFileName);
-        }
-        while (SourceDataFile.available()) {                                // throw the first row of each file away (column headers)
-            month_datatemp = SourceDataFile.read();                         // read a character from the DataFile
-            if (month_datatemp == '\n') break;                              // finish when end of row detected
-        }
-        while (SourceDataFile.available()) {                                // do while there are data available
-            digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));         // flash the blue led
-            month_datatemp = SourceDataFile.read();                         // read a character from the DataFile
-            month_field[month_character_count++] = month_datatemp;          // add the read character to the csvfield string
-            if (month_datatemp == ',' || month_datatemp == '\n') {          // look for end of field, comma or end of row
-                month_field[month_character_count - 1] = '\0';              // make Field a String
-                switch (month_data_field_number) {
-                case 0: {
-                    for (int x = 0; x < 11; x++) {
-                        Concatenation_Data_Record.field.ldate[x] = month_field[x];
-                    }
-                    //                    console_print("\tMonth Data: Date: " + String(Concatenation_Data_Record.field.ldate));
-                    break;
-                }
-                case 1: {
-                    for (int x = 0; x < 9; x++) {
-                        Concatenation_Data_Record.field.ltime[x] = month_field[x];
-                    }
-                    //                    console_print("\tMonth Data: Time: " + String(Concatenation_Data_Record.field.ltime));
-                    break;
-                }
-                case 2: {
-                    Concatenation_Data_Record.field.Voltage = atof(month_field);                         // Voltage
-                    //                    console_print("\tMonth Data: Voltage: " + String(Concatenation_Data_Record.field.Voltage));
-                    break;
-                }
-                case 3: {
-                    Concatenation_Data_Record.field.Amperage = atof(month_field);                       // Amperage
-                    //                    console_print("\tMonth Data: Amperage: " + String(Concatenation_Data_Record.field.Amperage));
-                    break;
-                }
-                case 4: {
-                    Concatenation_Data_Record.field.wattage = atof(month_field);                         // Wattage
-                    //                    console_print("\tMonth Data: Wattage: "+ String(Concatenation_Data_Record.field.wattage));
-                    break;
-                }
-                case 5: {
-                    Concatenation_Data_Record.field.uptime = atof(month_field);                           // Uptime
-                    //                    console_print("\tMonth Data: Uptime: " + String(Concatenation_Data_Record.field.uptime));
-                    break;
-                }
-                case 6: {
-                    Concatenation_Data_Record.field.kilowatthour = atof(month_field);               // Kilowatthour
-                    //                    console_print("\tMonth Data: Kilowatthours: " + String(Concatenation_Data_Record.field.kilowatthour));
-                    break;
-                }
-                case 7: {
-                    Concatenation_Data_Record.field.powerfactor = atof(month_field);                // Power Factor
-                    //                    console_print("\tMonth Data: Power Factor: " + String(Concatenation_Data_Record.field.powerfactor));
-                    break;
-                }
-                case 8: {
-                    Concatenation_Data_Record.field.frequency = atof(month_field);                     // Frequency
-                    //                    console_print("\tMonth Data: Frequency: " + String(Concatenation_Data_Record.field.frequency));
-                    break;
-                }
-                case 9: {
-                    Concatenation_Data_Record.field.sensor_temperature = atof(month_field);   // Sensor Temperature
-                    //                    console_print("\tMonth Data: Sensor Temperature: " + String(Concatenation_Data_Record.field.sensor_temperature));
-                    break;
-                }
-                case 10: {
-                    Concatenation_Data_Record.field.weather_temperature = atof(month_field); // Weather Temperature
-                    //                    console_print("\tMonth Data: Weather Temperature: " + String(Concatenation_Data_Record.field.weather_temperature));
-                    break;
-                }
-                case 11: {
-                    Concatenation_Data_Record.field.temperature_feels_like = atof(month_field);  // Temp Feels Like
-                    //                    console_print("\tMonth Data: Temperature Feels Like: " + String(Concatenation_Data_Record.field.temperature_feels_like));
-                    break;
-                }
-                case 12: {
-                    Concatenation_Data_Record.field.temperature_maximum = atof(month_field); // Temperature Maximum
-                    //                    console_print("\tMonth Data: Maximum Temperatre: " + String(Concatenation_Data_Record.field.temperature_maximum));
-                    break;
-                }
-                case 13: {
-                    Concatenation_Data_Record.field.temperature_minimum = atof(month_field); // Temperature Minimum
-                    //                    console_print("\tConcatenation_Data: Temperature Minimum: " + String(Concatenation_Data_Record.field.temperature_minimum));
-                    break;
-                }
-                case 14: {
-                    Concatenation_Data_Record.field.atmospheric_pressure = atof(month_field);     // Atmos Pressure
-                    //                    console_print("\tMonth Data: Atmospheric Pressure: " + String(Concatenation_Data_Record.field.atmospheric_pressure));
-                    break;
-                }
-                case 15: {
-                    Concatenation_Data_Record.field.relative_humidity = atof(month_field);     // Relative Humidity
-                    //                    console_print("\tMonth Data: Relative Humidity: " + String(Concatenation_Data_Record.field.relative_humidity));
-                    break;
-                }
-                case 16: {
-                    Concatenation_Data_Record.field.wind_speed = atof(month_field);                   // Wind Speed
-                    //                    console_print("\tMonth Data: Wind Speed: " + String(Concatenation_Data_Record.field.wind_speed));
-                    break;
-                }
-                case 17: {
-                    Concatenation_Data_Record.field.wind_direction = atof(month_field);           // Wind Direction
-                    //                    console_print("\tMonth Data: Wind Direction: " + String(Concatenation_Data_Record.field.wind_direction));
-                    break;
-                }
-                case 18: {
-                    Concatenation_Data_Record.field.gas_volume = atof(month_field);                   // Gas Volume
-                    if (Concatenation_Data_Record.field.gas_volume == 0) {          // 1st record of each data file
-                        Concatenation_Data_Record.field.gas_volume += Cumulative_Gas_Volume; // accumulate gas volume
-                    }
-                    Cumulative_Gas_Volume = Concatenation_Data_Record.field.gas_volume;          // save the volume
-                    //                    console_print("\tMonth Data: Gas Volume: " + String(Concatenation_Data_Record.field.gas_volume));
-                    break;
-                }
-                case 19: {
-                    for (int x = 0; x < month_character_count; x++) {
-                        Concatenation_Data_Record.field.weather_description[x] = month_field[x];
-                    }
-                    //                    console_print("\tMonth Data: Weather Description: " + String(Concatenation_Data_Record.field.weather_description));
-                    break;
-                }
-                default: {
-                    break;
-                }
-                } // end of switch
-                month_data_field_number++;
-                month_field[0] = '\0';
-                month_character_count = 0;
-            } // assembling the fields - end of if line end  
-            if (month_datatemp == '\n') {// if the character /n (end of line) save fields to the Concatenation File
-                month_data_field_number = 0;
-                ConcatenationFile.print(Concatenation_Data_Record.field.ldate);
-                ConcatenationFile.print(",");                                                               // [00]
-                ConcatenationFile.print(Concatenation_Data_Record.field.ltime);
-                ConcatenationFile.print(",");                                                               // [01]
-                ConcatenationFile.print(Concatenation_Data_Record.field.Voltage);
-                ConcatenationFile.print(",");                                                               // [02]
-                ConcatenationFile.print(Concatenation_Data_Record.field.Amperage);
-                ConcatenationFile.print(",");                                                               // [03]
-                ConcatenationFile.print(Concatenation_Data_Record.field.wattage);
-                ConcatenationFile.print(",");                                                               // [04]
-                ConcatenationFile.print(Concatenation_Data_Record.field.uptime);
-                ConcatenationFile.print(",");                                                               // [05]
-                ConcatenationFile.print(Concatenation_Data_Record.field.kilowatthour);
-                ConcatenationFile.print(",");
-                ConcatenationFile.print(Concatenation_Data_Record.field.powerfactor);
-                ConcatenationFile.print(",");
-                ConcatenationFile.print(Concatenation_Data_Record.field.frequency);
-                ConcatenationFile.print(",");
-                ConcatenationFile.print(Concatenation_Data_Record.field.sensor_temperature);
-                ConcatenationFile.print(",");                                                               // [09]
-                ConcatenationFile.print(Concatenation_Data_Record.field.weather_temperature);
-                ConcatenationFile.print(",");                                                               // [10]
-                ConcatenationFile.print(Concatenation_Data_Record.field.temperature_feels_like);
-                ConcatenationFile.print(",");                                                               // [11]
-                ConcatenationFile.print(Concatenation_Data_Record.field.temperature_maximum);
-                ConcatenationFile.print(",");                                                               // [12]
-                ConcatenationFile.print(Concatenation_Data_Record.field.temperature_minimum);
-                ConcatenationFile.print(",");                                                               // [13]
-                ConcatenationFile.print(Concatenation_Data_Record.field.atmospheric_pressure);
-                ConcatenationFile.print(",");                                                               // [14]
-                ConcatenationFile.print(Concatenation_Data_Record.field.relative_humidity);
-                ConcatenationFile.print(",");                                                               // [15]
-                ConcatenationFile.print(Concatenation_Data_Record.field.wind_speed);
-                ConcatenationFile.print(",");                                                               // [16]
-                ConcatenationFile.print(Concatenation_Data_Record.field.wind_direction);
-                ConcatenationFile.print(",");                                                               // [17]
-                ConcatenationFile.print(Concatenation_Data_Record.field.gas_volume);
-                ConcatenationFile.print(",");                                                               // [18]
-                ConcatenationFile.print(Concatenation_Data_Record.field.weather_description);               // [19]
-                // ConcatenationFile.println();                                                    // end of record
-                Concatenation_Data_Record_Count++;                            // increment the running record total
-                if (millis() > Last_Cycle + (unsigned long)5000) {                 // send requests every 5 seconds
-                    Get_Sensor_Data();
-                    server.handleClient();                                  // handle any messages from the website
-                }
-                Month_End_Records_Processed++;
-                //                console_print("\tRecord Added to " + ConcatenationFileName + " from " + SourceFileName);
-            } // end of end of line detected
-        }// end of while
-        console_print("\tProcessing of " + SourceFileName + " Complete");
-        SourceDataFile.close();                                                               // close the DataFile 
-        SourceDataFile.flush();
-        ConcatenationFile.close();                                  // close the ConcatenationFile to preserve file
-        ConcatenationFile.flush();
-    }
-    console_print("Stage 5. Delete Data Files");
-    String fileName = "/99999999.csv";
-    for (int i = 0; i < csv_count; i++) {
-        fileName = "/" + Csv_File_Names[i] + ".csv";
-        SD.remove(fileName);
-        console_print("\t" + fileName + " Removed");
-    }
-    console_print("\tFile Deletion Completed");
-    console_print("Month End Process Complete");
-    Month_End_Process_Status = false;
-    Send_WhatsApp_Message("Power Monitor - Month End Process Complete, " + ConcatenationFileName + " Now available for download");
+    mz_zip_writer_delete(&zip_writer);
+    console_print("Month End Process for Month " + String(Month_End_Date_Time_Data.field.Month) + "Complete");
+    Send_WhatsApp_Message("Power Monitor - Month End Process Complete for " + ZipFileName + "Zip file created, and now available for download");
+    return true;
 }
 void Send_WhatsApp_Message(String message) {
-    String WhatsApp_url = "https://api.callmebot.com/whatsapp.php?phone=447785938200&apikey=8876034&text=" + urlEncode(message);
+    // https://api.callmebot.com/whatsapp.php?source=web
+    // &phone=+447785938200
+    // &apikey=8876034&text=
+    String This_WhatsApp_url = "https://api.callmebot.com/whatsapp.php";
+    This_WhatsApp_url += "?phone=+447785938200";                                        // telephone number
+    This_WhatsApp_url += "&apikey=8876034";                                     // app key
+    This_WhatsApp_url += "&text=";
+    This_WhatsApp_url += urlEncode(message);                                    // message
     HTTPClient http;
-    http.begin(WhatsApp_url);
+    http.begin(This_WhatsApp_url);
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");    // Specify content-type header
-    int httpResponseCode = http.POST(WhatsApp_url);      // Send HTTP POST request
+    int httpResponseCode = http.POST(This_WhatsApp_url);      // Send HTTP POST request
     if (httpResponseCode == 200) {
-        console_print("WhatsApp Message " + message + " sent successfully");
+        console_print("WhatsApp Message " + message + " sent successfully at " + Current_Time_With);
     }
     else {
-        console_print("Error sending the WhatsApp message" + message);
-        console_print("WhatsApp HTTP response code: " + httpResponseCode);
+        console_print("Error sending the WhatsApp message: " + message + " Response Code:" + String(httpResponseCode));
     }
     http.end();
 }
-void Write_New_Data_Record_to_Data_File() {
+void Write_New_Data_Record_to_Data_Files() {
     digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                              // flash the SD activity LED on
     DataFile = SD.open("/" + DataFileName, FILE_APPEND);                                // open the SD file
     if (!DataFile) {                                                                    // oops - file not available!
@@ -1164,10 +956,10 @@ void Check_WiFi() {
             console_print("Network Error, WiFi lost >20 seconds, Restarting Processor");
             ESP.restart();
         }
-        StartWiFi(ssid, password);
+        StartWiFi(SSID, Password);
     }
 }
-int StartWiFi(const char* ssid, const char* password) {
+int StartWiFi(String ssid, String password) {
     console_print("WiFi Connecting to " + String(ssid));
     if (WiFi.status() == WL_CONNECTED) {                                // disconnect to start new wifi connection
         console_print("WiFi Already Connected");
@@ -1175,7 +967,7 @@ int StartWiFi(const char* ssid, const char* password) {
         WiFi.disconnect(true);
         console_print("Disconnected");
     }
-    WiFi.begin(ssid, password);                                                     // connect to the wifi network
+    WiFi.begin(SSID, Password);                                                     // connect to the wifi network
     int WiFi_Status = WiFi.status();
     console_print("WiFi Status: " + String(WiFi_Status) + " " + WiFi_Status_Message[WiFi_Status]);
     int wifi_connection_attempts = 0;                                                  // zero the attempt counter
@@ -1196,7 +988,7 @@ int StartWiFi(const char* ssid, const char* password) {
 }
 void initTime(String timezone) {
     console_print("Starting Time Server");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    configTime(gmtOffset_sec, daylightOffset_sec, NtpServer);
     setenv("TZ", timezone.c_str(), 1);                                        // adjust time settings to London
     tzset();
     console_print("Time Server Started");
@@ -1208,7 +1000,7 @@ void Prefill_Data_Array() {
     char data_temp;
     String message;
     digitalWrite(Blue_led_pin, !digitalRead(Blue_led_pin));                          // flash the blue led
-    console_print("Loading DataFile from " + String(DataFileName));
+    console_print("Pre Loading DataFile " + String(DataFileName) + " into Data Array");
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
     if (DataFile) {
         while (DataFile.available()) {                                 // throw the first row, column headers, away
@@ -1474,13 +1266,7 @@ void Prefill_Data_Array() {
     console_print("Loaded Data Records: " + String(Data_Record_Count));
 }
 void Shuffle_Data_Table() {
-#ifdef PRiNT_SHUFFLiNG_DATA_VALUES
-    console_print("Shuffling Data Table");
-#endif
     for (int i = 0; i < (Data_Table_Size - 1); i++) {       // shuffle the rows up, losing row 0, make row [table_size] free
-#ifdef PRiNT_SHUFFLiNG_DATA_VALUES
-        console_print("Shuffling Data Record "); console.print(i + 1); console.print(" to "); console.println((i));
-#endif
         strncpy(Readings_Table[i].field.ldate, Readings_Table[i + 1].field.ldate, sizeof(Readings_Table[i].field.ldate));                       // [0]  date
         strncpy(Readings_Table[i].field.ltime, Readings_Table[i + 1].field.ltime, sizeof(Readings_Table[i].field.ltime));                       // [1]  time
         Readings_Table[i].field.Voltage = Readings_Table[i + 1].field.Voltage;                          // Voltage
@@ -1535,7 +1321,7 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     }
 }
 void Page_Header(bool refresh, String Header) {
-    webpage.reserve(5000);
+    webpage.reserve(6000);
     webpage = "";
     webpage = "<!DOCTYPE html><head>";
     webpage += F("<html lang='en'>");                                                              // start of HTML section
@@ -1580,6 +1366,7 @@ void Page_Footer() {
     webpage += F("<li><a href='/WhatsApp'>WhatsApp Test</a></li>");
     webpage += F("<li><a href='/Reset'>Reset</a></li>");
     webpage += F("<li><a href='/Firmware'>Firmware</a></li>");
+    webpage += F("<li><a href='/ZipAllFiles'>ZipAllFiles</a>/li>");
     webpage += F("</ul>");
     webpage += F("<footer>");
     webpage += F("<p style='text-align: center;'>");
@@ -1681,14 +1468,25 @@ void i_Display() {
     lastcall = "display";
 }
 void i_WhatsApp() {
-    Send_WhatsApp_Message("Power Monitor - Test Message from Webpage, ");
+    console_print("WhatsApp Test Message Requested via Webpage");
+    Page_Header(false, "Sending Test WhatsApp  Message" + String(Current_Date_With) + " " + String(Current_Time_With));
+    if (millis() > (WhatsApp_Time + 1000)) {
+        WhatsApp_Time = millis();
+        Send_WhatsApp_Message("Power Monitor - Sending Test Message from Webpage at " + String(Current_Time_With));
+    }
+    Page_Footer();
 }
 void i_Web_Reset() {
     console_print("Web Reset of Processor Requested via Webpage");
+    Page_Header(false, "Resetting Processor at " + String(Current_Date_With) + " " + String(Current_Time_With));
+    if (millis() > (Reset_Time + 1000)) {
+        Reset_Time = millis();
+        Send_WhatsApp_Message("Power Monitor - Resetting Processor from Webpage at " + String(Current_Time_With));
+    }
+    Page_Footer();
     ESP.restart();
 }
 void i_Information() {                                                    // Display file size of the datalog file
-    int file_count = Count_Files_on_SD_Drive();
     console_print("Web Display of information Requested via Webpage");
     String ht = String(Date_of_Highest_Voltage + " at " + Time_of_Highest_Voltage + " as ");
     ht += String(Highest_Voltage) + " volts";
@@ -1696,16 +1494,17 @@ void i_Information() {                                                    // Dis
     lt += String(Lowest_Voltage) + " volts";
     String ha = String(Date_of_Highest_Amperage + " at " + Time_of_Highest_Amperage + " as ");
     ha += String(Highest_Amperage) + " amps";
+    File DataFile = SD.open("/" + DataFileName, FILE_READ);                // Now read data from FS
+    webpage = "";
     Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
-    File DataFile = SD.open("/" + DataFileName, FILE_READ);                               // Now read data from FS
-    // 1.Wifi Signal Strength --------------
+    // 1.Wifi Signal Strength ---------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true;font-size:14px; '");
     webpage += F(">WiFi Signal Strength = ");
     webpage += String(WiFi_Signal_Strength) + " Dbm";
     webpage += "</span></strong></p>";
-    // Row 2.Data File Size -----
+    // Row 2.Data File Size -----------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
@@ -1713,7 +1512,7 @@ void i_Information() {                                                    // Dis
     webpage += String(DataFile.size());
     webpage += F(" Bytes");
     webpage += "</span></strong></p>";
-    // Row 3.Freespace ----------
+    // Row 3.Freespace ----------------------------------------------------------------------------
     if (SD_freespace < Critical_SD_Freespace) {
         webpage += F("<p ");
         webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
@@ -1732,21 +1531,22 @@ void i_Information() {                                                    // Dis
         webpage += F(" MB");
         webpage += "</span></strong></p>";
     }
-    // Row 4.File Count ---------
+    // Row 4.File Count ---------------------------------------------------------------------------
+    int file_count = Count_Files_on_SD_Drive();
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
     webpage += F("'> Number of Files on SD : ");
     webpage += String(file_count);
     webpage += "</span></strong></p>";
-    // Row 5.Last Boot Time -----
+    // Row 5.Last Boot Time -----------------------------------------------------------------------
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
     webpage += F("'>Date the System was Booted : ");
     webpage += Last_Boot_Date_With + " at " + Last_Boot_Time_With;
     webpage += "</span></strong></p>";
-    // Row 6.Data Record Count --
+    // Row 6.Data Record Count --------------------------------------------------------------------
     double Percentage = (Data_Record_Count * (double)100) / (double)17280;
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
@@ -1870,51 +1670,52 @@ void i_Information() {                                                    // Dis
     }
     webpage += "</span></strong></p>";
     webpage += F("<p ");
-    // Row 19.Month ENd CUrrent File being Processed
+    // Row 19.Month End CUrrent File being Processed
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
     if (Month_End_Process_Status) {
         webpage += F(">Currently processing file: ");
-        webpage += SourceFileName;
+        webpage += ZipFileName;
     }
     else {
         webpage += F(" ");
     }
     webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Row 20.Month End Records Written Percentage of a month
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font - size:12px; '");
-    if (Month_End_Process_Status) {
-        webpage += F(">Month End Records Written: ");
-        webpage += String(Month_End_Records_Processed);
-        webpage += F("Percentage of Full Month : ");
-        webpage += String(((double)Month_End_Records_Processed * (double)100) / (((double)24 * (double)60 * (double)60 * (double)31) / (double)5)) + "%";
-    }
-    else {
-        webpage += F(".");
-    }
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // 21.Month End Record Written
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font - size:12px; '");
-    if (Month_End_Process_Status) {
-        webpage += F(">Month End Records Written: ");
-        webpage += String(Month_End_Records_Processed);
-    }
-    else {
-        webpage += F(".");
-    }
+    //    webpage += F("<p ");
+    //    // Row 20.Month End Records Written Percentage of a month
+    //    webpage += F("<p ");
+    //    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
+    //    webpage += F("bold:true; font - size:12px; '");
+    //    if (Month_End_Process_Status) {
+    //        webpage += F(">Month End Records Written: ");
+    //        webpage += String(Month_End_Records_Processed);
+    //        webpage += F("Percentage of Full Month : ");
+    //        webpage += String(((double)Month_End_Records_Processed * (double)100) / (((double)24 * (double)60 * (double)60 * (double)31) / (double)5)) + "%";
+    //    }
+    //    else {
+    webpage += F(".");
+    //    }
+    //    webpage += "</span></strong></p>";
+    //    webpage += F("<p ");
+    //    // 21.Month End Record Written
+    //    webpage += F("<p ");
+    //    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
+    //    webpage += F("bold:true; font - size:12px; '");
+    //    if (Month_End_Process_Status) {
+    //        webpage += F(">Month End Records Written: ");
+    //        webpage += String(Month_End_Records_Processed);
+    //    }
+    //    else {
+    //        webpage += F(".");
+    //    }
     webpage += "</span></strong></p>";
     webpage += F("<p ");
     // -------
     webpage += F("<</h3>");
     DataFile.close();
     Page_Footer();
+    lastcall = "display";
 }
 void i_Download_Files() {
     int file_count = Count_Files_on_SD_Drive();             // this counts and creates an array of file names on SD
@@ -2005,24 +1806,6 @@ void i_Del_File() {                                                             
     }
     Page_Footer();
 }
-void i_Wipe_Files() {                                                // selected by pressing combonation of buttons
-    console_print("Start of Wipe Files Request by Switch");
-    String filename;
-    File root = SD.open("/");                                                          //  Open the root directory
-    while (true) {
-        File entry = root.openNextFile();                                                    //  get the next file
-        if (entry) {
-            filename = entry.name();
-            console_print("Removing " + filename);
-            SD.remove(entry.name());                                                           //  delete the file
-        }
-        else {
-            root.close();
-            console_print("All files removed from root directory, rebooting");
-            ESP.restart();
-        }
-    }
-}
 int Count_Files_on_SD_Drive() {
     int file_count = 0;
     bool files_present = false;
@@ -2041,7 +1824,6 @@ int Count_Files_on_SD_Drive() {
                 }
             }
             DataFile.close(); // close the file:
-            webpage = "";
         }
         else {
             root.close();
@@ -2397,6 +2179,7 @@ void Parse_Weather_info(String payload) {
     "country":"GB","sunrise":1672819699,"sunset":1672848573},
     "timezone":0,"id":2656192,"name":"Basingstoke","cod":200}
     */
+
     int start = 0;
     int end = 0;
     // Temperature ----------
