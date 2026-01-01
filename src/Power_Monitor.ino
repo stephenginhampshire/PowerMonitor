@@ -126,8 +126,8 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
 #define VERSION_MINOR 0   // Backwards-compatible functionality additions
-#define VERSION_PATCH 3   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.0.3"
+#define VERSION_PATCH 5   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.0.5"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -334,12 +334,13 @@ struct RuntimeConfig {
     String weather_region = "uk";
     bool weather_enabled = true;
     bool whatsapp_enabled = true;
+    bool gas_meter_enabled = false;  // Gas meter connected and monitoring enabled
     int debug_level = 2;  // 0=none, 1=errors, 2=info, 3=verbose
     unsigned long main_cycle_ms = 5000;
     unsigned long weather_update_ms = 600000;
     unsigned long health_check_ms = 60000;
-    String ota_username = "admin";  // OTA firmware update login
-    String ota_password = "admin";  // OTA firmware update password
+    String ota_username = "SteveG";  // OTA firmware update login
+    String ota_password = "W00dle1gh";  // OTA firmware update password
 };
 RuntimeConfig config;
 
@@ -377,7 +378,8 @@ constexpr int Red_Switch_pin = 33;
 constexpr int Green_led_pin = 26;
 constexpr int Yellow_Switch_pin = 27;
 constexpr int Blue_led_pin = 4;
-constexpr int RS485_Enable_pin = 22;
+constexpr int RS485_DE_pin = 22;        // RS485 Driver Enable (TX) - Active HIGH
+constexpr int RS485_RE_pin = 25;        // RS485 Receiver Enable (RX) - Active HIGH (inverted in code)
 constexpr int RS485_Tx_pin = 17;
 constexpr int RS485_Rx_pin = 16;
 constexpr int SS_pin = 5;
@@ -552,8 +554,6 @@ constexpr int Request_Kilowatthour = 4;
 constexpr int Request_Power_Factor = 5;
 constexpr int Request_Frequency = 6;
 constexpr int Request_Sensor_Temperature = 7;
-constexpr bool receive = 0;
-constexpr bool transmit = 1;
 constexpr int Number_of_RS485_Requests = 7;
 constexpr byte RS485_Requests[Number_of_RS485_Requests + 1][8] = {
                         {0x02,0x03,0x00,0x0E,0x00,0x01,0xE5,0xFA},	// [0]  Request Voltage, in tenths of a volt
@@ -847,7 +847,7 @@ bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
 void smartDelay(unsigned long ms) {
     unsigned long start = millis();
     while (millis() - start < ms) {
-        timerWrite(Timer0_Cfg, 0);  // Feed watchdog
+        // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
         server.handleClient();       // Handle web requests
         yield();                     // Allow ESP32 background tasks
     }
@@ -999,6 +999,9 @@ void setup() {
     server.on("/ConfirmDeletePreviousMonth", i_Confirm_Delete_Previous_Month);  // confirm bulk delete
     server.on("/Reset", i_Web_Reset);               // reset the processor from the webpage
     server.on("/WhatsApp", i_WhatsApp);             // send a test Whatsapp message from the webpage
+    server.on("/ConfigUpload", i_Config_Upload);    // configuration file upload page
+    server.on("/UploadConfig", HTTP_POST, i_Upload_Config_Complete, i_Handle_Config_Upload);  // handle config file upload
+    server.on("/DownloadConfig", i_Download_Config); // download current config.json
     /**
      * @brief OTA firmware update handler endpoint
      * 
@@ -1048,7 +1051,10 @@ void setup() {
         server.begin();                             // Start Webserver
         console_print("Server Started");
         RS485_Port.begin(RS485_Baudrate, SERIAL_8N1, RS485_Rx_pin, RS485_Tx_pin);
-        pinMode(RS485_Enable_pin, OUTPUT);
+        pinMode(RS485_DE_pin, OUTPUT);      // DE - Driver Enable (TX)
+        pinMode(RS485_RE_pin, OUTPUT);      // RE - Receiver Enable (RX)
+        digitalWrite(RS485_DE_pin, LOW);    // Disable TX initially
+        digitalWrite(RS485_RE_pin, HIGH);   // Enable RX initially (active HIGH, so HIGH=enabled)
         delay(10);
         console_print("SD Configuration Commenced");
         bool sd_initialized = false;
@@ -1156,13 +1162,13 @@ void setup() {
         else {
             console_print("Weather not Enabled");
         }
-        // Initialize Watchdog Timer
-        console_print("Initializing Watchdog Timer");
-        Timer0_Cfg = timerBegin(0, 80, true);                              // Timer 0, prescaler 80 (1MHz), count up
-        timerAttachInterrupt(Timer0_Cfg, &resetModule, true);              // Attach ISR
-        timerAlarmWrite(Timer0_Cfg, WDT_TiMEOUT * 1000000, false);         // Set alarm value in microseconds
-        timerAlarmEnable(Timer0_Cfg);                                      // Enable the alarm
-        console_print("Watchdog Timer Initialized - " + String(WDT_TiMEOUT) + " second timeout");
+        // Initialize Watchdog Timer - DISABLED FOR TEST
+        console_print("Watchdog Timer DISABLED for RS485 testing");
+        // Timer0_Cfg = timerBegin(0, 80, true);                              // Timer 0, prescaler 80 (1MHz), count up
+        // timerAttachInterrupt(Timer0_Cfg, &resetModule, true);              // Attach ISR
+        // timerAlarmWrite(Timer0_Cfg, WDT_TiMEOUT * 1000000, false);         // Set alarm value in microseconds
+        // timerAlarmEnable(Timer0_Cfg);                                      // Enable the alarm
+        // console_print("Watchdog Timer Initialized - " + String(WDT_TiMEOUT) + " second timeout");
         digitalWrite(Blue_led_pin, LOW);
         
         // Log system information at startup (Issue #27 - Version Management)
@@ -1207,7 +1213,7 @@ void loop() {
         digitalWrite(Green_led_pin, HIGH);
         Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
     }
-    timerWrite(Timer0_Cfg, 0);                                      // Feed the watchdog timer
+    // timerWrite(Timer0_Cfg, 0);                                      // DISABLED FOR TEST
     Check_WiFi();                                                   // check that the WiFi is still connected
     Check_Blue_Switch(false);
     Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
@@ -1358,7 +1364,8 @@ void Check_NewDay() {
         else {
             console_print("New Day Detected");                                      // proven day change
             Create_or_Open_New_Data_File();                                         // create a new day file
-            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time);
+            unsigned long freeSpaceMB = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time + " | SD Free: " + String(freeSpaceMB) + "MB");
             Check_NewMonth();                                                       // if the date changed check if a new month started
         }
         Clear_Arrays();                                                             // clear memory
@@ -1532,12 +1539,13 @@ void create_default_config() {
     configFile.println("  \"weather_region\": \"uk\",");
     configFile.println("  \"weather_enabled\": true,");
     configFile.println("  \"whatsapp_enabled\": true,");
+    configFile.println("  \"gas_meter_enabled\": false,");
     configFile.println("  \"debug_level\": 2,");
     configFile.println("  \"main_cycle_ms\": 5000,");
     configFile.println("  \"weather_update_ms\": 600000,");
     configFile.println("  \"health_check_ms\": 60000,");
-    configFile.println("  \"ota_username\": \"admin\",");
-    configFile.println("  \"ota_password\": \"admin\"");
+    configFile.println("  \"ota_username\": \"SteveG\",");
+    configFile.println("  \"ota_password\": \"W00dle1gh\"");
     configFile.println("}");
     
     configFile.close();
@@ -1621,6 +1629,9 @@ bool load_config_from_sd() {
         else if (line.indexOf("whatsapp_enabled") >= 0) {
             config.whatsapp_enabled = (line.indexOf("true") >= 0);
         }
+        else if (line.indexOf("gas_meter_enabled") >= 0) {
+            config.gas_meter_enabled = (line.indexOf("true") >= 0);
+        }
         else if (line.indexOf("debug_level") >= 0) {
             int start = line.indexOf(":") + 1;
             config.debug_level = line.substring(start).toInt();
@@ -1657,6 +1668,7 @@ bool load_config_from_sd() {
     console_print("  Weather: " + config.weather_city + ", " + config.weather_region);
     console_print("  Weather Enabled: " + String(config.weather_enabled ? "Yes" : "No"));
     console_print("  WhatsApp Enabled: " + String(config.whatsapp_enabled ? "Yes" : "No"));
+    console_print("  Gas Meter Enabled: " + String(config.gas_meter_enabled ? "Yes" : "No"));
     console_print("  Debug Level: " + String(config.debug_level));
     console_print("  Main Cycle: " + String(config.main_cycle_ms) + "ms");
     console_print("  OTA Username: " + config.ota_username);
@@ -2680,6 +2692,132 @@ void i_Web_Reset() {
     Page_Footer();
     ESP.restart();
 }
+void i_Config_Upload() {
+    console_print("Config Upload Page Requested via Webpage");
+    webpage.reserve(3500);  // Pre-allocate for upload page
+    Page_Header(false, "Configuration File Management");
+    
+    webpage += F("<h3>Current Configuration</h3>");
+    webpage += F("<table style='border:1px solid #ccc; padding:10px;'>");
+    webpage += String(F("<tr><td><strong>WiFi SSID:</strong></td><td>")) + config.wifi_ssid + String(F("</td></tr>"));
+    webpage += String(F("<tr><td><strong>Weather Location:</strong></td><td>")) + config.weather_city + String(F(", ")) + config.weather_region + String(F("</td></tr>"));
+    webpage += String(F("<tr><td><strong>Weather Enabled:</strong></td><td>")) + String(config.weather_enabled ? "Yes" : "No") + String(F("</td></tr>"));
+    webpage += String(F("<tr><td><strong>WhatsApp Enabled:</strong></td><td>")) + String(config.whatsapp_enabled ? "Yes" : "No") + String(F("</td></tr>"));
+    webpage += String(F("<tr><td><strong>Gas Meter Enabled:</strong></td><td>")) + String(config.gas_meter_enabled ? "Yes" : "No") + String(F("</td></tr>"));
+    webpage += F("</table><br>");
+    
+    webpage += F("<h3>Download Current Configuration</h3>");
+    webpage += F("<p>Download the current config.json file to edit on your PC:</p>");
+    webpage += F("<a href='/DownloadConfig'><button style='padding:10px 20px;'>Download config.json</button></a>");
+    webpage += F("<br><br>");
+    
+    webpage += F("<h3>Upload New Configuration</h3>");
+    webpage += F("<p>Upload a modified config.json file. ESP32 will validate and reboot to apply changes.</p>");
+    webpage += F("<form method='POST' action='/UploadConfig' enctype='multipart/form-data'>");
+    webpage += F("<input type='file' name='config' accept='.json'><br><br>");
+    webpage += F("<input type='submit' value='Upload and Reboot' style='padding:10px 20px;'>");
+    webpage += F("</form>");
+    
+    webpage += F("<br><p style='color:red;'><strong>Note:</strong> ESP32 will reboot automatically after successful upload.</p>");
+    
+    Page_Footer();
+}
+void i_Download_Config() {
+    console_print("Config Download Requested via Webpage");
+    
+    File configFile = SD.open(CONFIG_FILENAME, FILE_READ);
+    if (!configFile) {
+        server.send(404, "text/plain", "Config file not found");
+        console_print("ERROR: Config file not found for download");
+        return;
+    }
+    
+    server.sendHeader("Content-Disposition", "attachment; filename=config.json");
+    server.streamFile(configFile, "application/json");
+    configFile.close();
+    console_print("Config file downloaded successfully");
+}
+void i_Handle_Config_Upload() {
+    HTTPUpload& upload = server.upload();
+    static File uploadFile;
+    
+    if (upload.status == UPLOAD_FILE_START) {
+        String filename = upload.filename;
+        console_print("Config Upload Start: " + filename);
+        
+        // Save uploaded file as temporary
+        uploadFile = SD.open("/config_new.json", FILE_WRITE);
+        if (!uploadFile) {
+            console_print("ERROR: Failed to create temporary config file");
+        }
+    }
+    else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (uploadFile) {
+            uploadFile.write(upload.buf, upload.currentSize);
+        }
+    }
+    else if (upload.status == UPLOAD_FILE_END) {
+        if (uploadFile) {
+            uploadFile.close();
+            console_print("Config Upload Complete: " + String(upload.totalSize) + " bytes");
+        }
+    }
+}
+void i_Upload_Config_Complete() {
+    webpage.reserve(2500);
+    
+    // Validate the uploaded config file
+    File newConfig = SD.open("/config_new.json", FILE_READ);
+    if (!newConfig) {
+        Page_Header(false, "Upload Failed");
+        webpage += F("<p style='color:red;'><strong>ERROR:</strong> Failed to read uploaded file.</p>");
+        webpage += F("<br><a href='/ConfigUpload'>Try Again</a>");
+        Page_Footer();
+        console_print("ERROR: Failed to open uploaded config for validation");
+        return;
+    }
+    
+    // Basic validation - check for key fields
+    String content = newConfig.readString();
+    newConfig.close();
+    
+    bool valid = true;
+    if (content.indexOf("wifi_ssid") < 0 || content.indexOf("wifi_password") < 0) {
+        valid = false;
+        console_print("ERROR: Config validation failed - missing required fields");
+    }
+    
+    if (!valid) {
+        SD.remove("/config_new.json");
+        Page_Header(false, "Upload Failed");
+        webpage += F("<p style='color:red;'><strong>ERROR:</strong> Invalid config file. Missing required fields (wifi_ssid, wifi_password).</p>");
+        webpage += F("<br><a href='/ConfigUpload'>Try Again</a>");
+        Page_Footer();
+        return;
+    }
+    
+    // Backup old config
+    if (SD.exists(CONFIG_FILENAME)) {
+        SD.remove("/config_backup.json");
+        SD.rename(CONFIG_FILENAME, "/config_backup.json");
+        console_print("Old config backed up to config_backup.json");
+    }
+    
+    // Replace with new config
+    SD.rename("/config_new.json", CONFIG_FILENAME);
+    console_print("New config installed successfully");
+    
+    Page_Header(false, "Config Upload Successful");
+    webpage += F("<p style='color:green;'><strong>SUCCESS:</strong> Configuration file uploaded and validated.</p>");
+    webpage += F("<p>Old configuration backed up to <strong>config_backup.json</strong></p>");
+    webpage += F("<p><strong>ESP32 will reboot in 3 seconds to apply new configuration...</strong></p>");
+    webpage += F("<script>setTimeout(function(){ window.location.href = '/'; }, 5000);</script>");
+    Page_Footer();
+    
+    console_print("Rebooting to apply new configuration...");
+    smartDelay(3000);
+    ESP.restart();
+}
 void i_Information() {                                                    // Display file size of the datalog file
     console_print("Web Display of information Requested via Webpage");
     String ht = String(Date_of_Highest_Voltage + " at " + Time_of_Highest_Voltage + " as ");
@@ -3098,19 +3236,22 @@ int Count_Files_on_SD_Drive() {
  * 
  * @param field The request index (0 to Number_of_RS485_Requests) to send
  * 
- * @note RS485_Enable_pin controls transmit/receive direction
+ * @note RS485_DE_pin and RS485_RE_pin control transmit/receive direction
  * @note 2ms delay between bytes for hardware settling time
  * @note Request format defined in RS485_Requests array (KWS protocol)
  * @see Receive(), RS485_Requests[][], RS485_BYTE_DELAY_MS
  */
 void Send_Request(int field) {
-    digitalWrite(RS485_Enable_pin, transmit);                 // set RS485_Enable HiGH to transmit values to RS485
+    digitalWrite(RS485_RE_pin, LOW);                          // Disable RX (RE active HIGH, so LOW=disabled)
+    digitalWrite(RS485_DE_pin, HIGH);                         // Enable TX (DE active HIGH)
     for (int x = 0; x < 7; x++) {
         RS485_Port.write(RS485_Requests[field][x]);                  // write the Request string to the RS485 Port
         delay(2);
     }
     RS485_Port.write(RS485_Requests[field][7]);
-    delay(2);
+    delay(10);                                                 // Wait for transmission to complete
+    RS485_Port.flush();                                        // Ensure all bytes transmitted
+    while (RS485_Port.available()) RS485_Port.read();          // Flush echo from TX buffer
 }
 /**
  * @brief Receive and parse RS485 response from KWS power monitoring hardware
@@ -3144,21 +3285,27 @@ bool Receive(int field) {
     bool value_status = false;
     unsigned long start_time;                                   // take the start time, used to check for time out
     long value[7] = { 0,0,0,0,0,0,0 };
-    digitalWrite(RS485_Enable_pin, receive);                    // set Enable pin low to receive values from RS485
+    digitalWrite(RS485_DE_pin, LOW);                            // Disable TX (DE active HIGH, so LOW=disabled)
+    digitalWrite(RS485_RE_pin, HIGH);                           // Enable RX (RE active HIGH, so HIGH=enabled)
+    delay(20);                                                  // Wait for KWS to respond
     start_time = millis();                                      // take the start time, used to check for time out
+    int bytes_received = 0;  // DEBUG: Count bytes
+    byte first_byte = 0;     // DEBUG: Capture first byte
     do {
+        // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
         while (!RS485_Port.available()) {                                          // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {         // no data received within 500 ms so timeout
-                console_print("No Reply from RS485 within 500 ms - Rebooting");
-                Send_WhatsApp_Message("Power Monitor - No Reply from RS485 within 500ms - Automatic Reboot");
-                smartDelay(1000);  // Allow time for message to be sent (keeps system responsive)
-                ESP.restart();  // Automatically reboot instead of waiting for switch press
+                console_print("RS485 TIMEOUT: field=" + String(field) + " - no response");
+                return false;  // Return failure instead of rebooting
             }
-            yield();  // Allow WiFi stack and other background tasks to run (Issue #20)
+            // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
+            // yield();  // DISABLED FOR TEST
         }
         value_status = true;                          // set the value status to true, which is true at this point
         while (RS485_Port.available()) {                                // Data is available so add them to Result
             received_character = RS485_Port.read();                                          // take the character
+            bytes_received++;  // DEBUG
+            if (bytes_received == 1) first_byte = received_character;  // DEBUG: Save first byte
             switch (pointer) {                            // check the received character is correct at this point
             case 0: {
                 if (received_character != 2) {
@@ -3269,8 +3416,10 @@ bool Receive(int field) {
         for (int x = 0; x < 8; x++) {
             Current_Data_Record.field.ltime[x] = Current_Time_With[x];
         }
+        console_print("RS485 OK: field=" + String(field) + " bytes=" + String(bytes_received) + " status=" + String(value_status));  // DEBUG
         return true;
     }
+    console_print("RS485 FAIL: field=" + String(field) + " bytes=" + String(bytes_received) + " 1st=0x" + String(first_byte, HEX) + " status=" + String(value_status));  // DEBUG
     return false;
 }
 void Check_Blue_Switch(bool Month_End_Auto) {
@@ -3318,6 +3467,10 @@ void Check_Blue_Switch(bool Month_End_Auto) {
     }
 }
 void Check_Gas_Switch() {
+    if (!config.gas_meter_enabled) {
+        return;  // Gas meter monitoring disabled - skip to prevent false triggers from floating input
+    }
+    
     Gas_Switch.update();                                                                // read the gas switch
     if (Gas_Switch.fell()) {
         console_print("Gas Switch Fell");

@@ -2081,7 +2081,7 @@ void Receive(int field) {
             switch (pointer) {                            // check the received character is correct at this point
             case 0: {
                 if (received_character != 2) {
-                    value_status = false;                      // first byte should be a 2, used as sync character
+                    value_status = false;        // first byte should be a 2, used as sync character
                 }
                 value[0] = received_character;
                 break;

@@ -5,6 +5,26 @@ All notable changes to the Power Monitor project will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-01-01
+
+### Fixed
+- **CRITICAL**: Watchdog timer timeout during RS485 communication causing system crashes
+- Added watchdog feeding in RS485 receive wait loop to prevent timeout
+- Improved RS485 transmission timing with proper flush() and delays
+- Moved RS485 mode switching from Receive() to Send_Request() for better timing
+- Added RS485 debug output to diagnose communication issues
+
+### Changed
+- Increased delays in Send_Request() after transmission (2ms → 10ms) and before receive (5ms → 10ms)
+- Enhanced RS485 error logging with hex dump of transmitted/received bytes
+
+## [1.0.4] - 2025-12-31
+
+### Fixed
+- String concatenation compilation errors in `i_Config_Upload()` function
+- Fixed ambiguous type conversion when mixing F() macros with String variables
+- Wrapped F() macros in String() constructors for WiFi SSID, Weather Location, Weather Enabled, WhatsApp Enabled, and Gas Meter Enabled display rows
+
 ## [1.0.3] - 2025-01-15
 
 ### Security
