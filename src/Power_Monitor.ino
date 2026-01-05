@@ -67,6 +67,9 @@ Change Record
 30/12/2025  1.0.0 Semantic versioning adopted (Issue #27) - MAJOR.MINOR.PATCH format for clear version communication, helper function for formatted version display
 30/12/2025  1.0.1 Comprehensive function documentation (Issue #28) - Added professional Doxygen-style comments to all major functions: purpose, parameters, return values, side effects
 30/12/2025  1.0.2 Critical bug fix - Monthly file consolidation header corrected to match actual CSV format (20 columns instead of 8), preventing data corruption
+05/01/2026  1.0.3 RS485 pin separation - Split RS485 enable signals into separate DE (pin 22) and RE (pin 25) for improved signal integrity and proper transceiver control
+05/01/2026  1.0.4 RS485 retry logic - Implemented 3-attempt retry mechanism with adaptive delays (75ms, 100ms, 125ms) and per-field error tracking to improve communication reliability
+05/01/2026  1.0.5 UI improvements and bug fixes - Blue LED flashes on SD writes (100ms smartDelay), web menu padding reduced (25px to 15px), HTML typo fixed in ZipAllFiles link
 
 SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 - MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
