@@ -1,5 +1,23 @@
 # Power Monitor Technical User Guide
-## Version 1.0.3
+## Version 1.0.5
+
+## Changelog
+
+### Version 1.0.5 (January 5, 2026)
+- **RS485 Communication Improvements**:
+  - Separated DE (Driver Enable, pin 22) and RE (Receiver Enable, pin 25) control lines
+  - Both pins configured as Active HIGH
+  - Implemented 3-attempt retry logic with adaptive delays (75ms, 100ms, 125ms)
+  - Added per-field error tracking and statistics reporting
+  - Increased inter-request delay from 50ms to 75ms for improved reliability
+- **System Enhancements**:
+  - Watchdog timer fully operational with proper refresh in all functions
+  - Blue LED (pin 4) now flashes on SD card write operations (100ms visible pulse)
+  - WhatsApp reboot notifications active
+- **Web Interface**:
+  - Fixed menu wrapping issue - all items now fit on single line
+  - Reduced menu padding from 25px to 15px
+  - Fixed HTML typo in ZipAllFiles menu link
 
 ## 1. System Overview
 
@@ -81,14 +99,17 @@ The Power Monitor is a comprehensive energy monitoring system that:
 
 Every 5 seconds (configurable via `config.main_cycle_ms`):
 
-1. **RS485 Transaction** (per request):
-   - Enable RS485 transmitter (GPIO 22 HIGH)
-   - Send 8-byte request packet
-   - Disable transmitter (GPIO 22 LOW)
-   - Wait for response (timeout: 100ms)
-   - Parse 7-byte response packet
-   - Extract 2-byte data value
-   - Apply scaling factor (divide by 10, 100, 1000, etc.)
+1. **RS485 Transaction** (per request, with retry logic):
+   - Enable RS485 transmitter (GPIO 22 DE=HIGH, GPIO 25 RE=HIGH)
+   - Send 8-byte request packet (2ms delay between bytes)
+   - Disable transmitter (GPIO 22 DE=LOW)
+   - Enable receiver (GPIO 25 RE=HIGH for RX)
+   - Wait for response (timeout: 500ms)
+   - Parse response packet
+   - Extract data value
+   - Apply scaling factor
+   - **Retry Logic**: Up to 3 attempts per request with adaptive delays (75-125ms)
+   - **Error Tracking**: Per-field failure statistics reported every 10 failures
 
 2. **Data Processing**:
    - Store in `Readings_Table[8]` structure array
@@ -129,9 +150,10 @@ Every 5 seconds (configurable via `config.main_cycle_ms`):
 |    17    |   RS485 TX     |   Output  | RS485 transmit to KWS meter    |
 |    18    |      SCK       |   Output  |     SD card SPI clock          |
 |    19    |     MISO       |   Input   |     SD card SPI data in        |
-|    21    |  Gas Switch    |   Input   | Gas meter pulse (0.1m/pulse)   |
-|    22    | RS485 Enable   |   Output  | RS485 transceiver DE/RE ctrl   |
+|    21    |  Gas Switch    |   Input   | Gas meter pulse (0.1m³/pulse)   |
+|    22    |  RS485 DE      |   Output  | RS485 Driver Enable (TX ctrl)   |
 |    23    |     MOSI       |   Output  |    SD card SPI data out        |
+|    25    |  RS485 RE      |   Output  | RS485 Receiver Enable (RX ctrl) |
 |    26    |   Green LED    |   Output  |      Status indicator          |
 |    27    | Yellow Switch  |   Input   |     User input button          |
 |    32    |  Blue Switch   |   Input   |     User input button          |
@@ -145,11 +167,13 @@ Every 5 seconds (configurable via `config.main_cycle_ms`):
 - **Baud Rate**: 9600 bps, 8N1 (8 data bits, no parity, 1 stop bit)
 - **Slave Address**: 0x02
 - **Wiring**:
-  - ESP32 GPIO 17 (TX)  RS485 transceiver DI
-  - ESP32 GPIO 16 (RX)  RS485 transceiver RO
-  - ESP32 GPIO 22 (Enable)  RS485 transceiver DE and RE (tied together)
-  - RS485 A  KWS meter A terminal
-  - RS485 B  KWS meter B terminal
+  - ESP32 GPIO 17 (TX) → RS485 transceiver DI
+  - ESP32 GPIO 16 (RX) → RS485 transceiver RO
+  - ESP32 GPIO 22 (DE) → RS485 transceiver DE (Driver Enable - Active HIGH)
+  - ESP32 GPIO 25 (RE) → RS485 transceiver RE (Receiver Enable - Active HIGH)
+  - RS485 A → KWS meter A terminal
+  - RS485 B → KWS meter B terminal
+- **Note**: DE and RE are separate pins (both Active HIGH). During TX: both HIGH. During RX: DE=LOW, RE=HIGH.
 
 #### SD Card Module
 - **Interface**: SPI (Serial Peripheral Interface)

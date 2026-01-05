@@ -379,7 +379,7 @@ constexpr int Green_led_pin = 26;
 constexpr int Yellow_Switch_pin = 27;
 constexpr int Blue_led_pin = 4;
 constexpr int RS485_DE_pin = 22;        // RS485 Driver Enable (TX) - Active HIGH
-constexpr int RS485_RE_pin = 25;        // RS485 Receiver Enable (RX) - Active HIGH (inverted in code)
+constexpr int RS485_RE_pin = 25;        // RS485 Receiver Enable (RX) - Active HIGH
 constexpr int RS485_Tx_pin = 17;
 constexpr int RS485_Rx_pin = 16;
 constexpr int SS_pin = 5;
@@ -450,6 +450,10 @@ hw_timer_t* Timer0_Cfg = NULL;
 WebServer server(80);               // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
 HTTPClient http;
+// RS485 Error Tracking
+int RS485_field_failures[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // Track failures per field
+int RS485_total_attempts = 0;                             // Total request attempts
+int RS485_total_failures = 0;                             // Total failed requests
 // DataFile constants and variables --------
 File DataFile;                     // Full data file, holds all readings from KWS-AC301L
 String DataFileName = "20220101";       // .cvs
@@ -847,7 +851,7 @@ bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
 void smartDelay(unsigned long ms) {
     unsigned long start = millis();
     while (millis() - start < ms) {
-        // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
+        timerWrite(Timer0_Cfg, 0);  // Reset watchdog timer
         server.handleClient();       // Handle web requests
         yield();                     // Allow ESP32 background tasks
     }
@@ -1054,7 +1058,7 @@ void setup() {
         pinMode(RS485_DE_pin, OUTPUT);      // DE - Driver Enable (TX)
         pinMode(RS485_RE_pin, OUTPUT);      // RE - Receiver Enable (RX)
         digitalWrite(RS485_DE_pin, LOW);    // Disable TX initially
-        digitalWrite(RS485_RE_pin, HIGH);   // Enable RX initially (active HIGH, so HIGH=enabled)
+        digitalWrite(RS485_RE_pin, HIGH);   // Enable RX initially (Active HIGH, so HIGH=enabled)
         delay(10);
         console_print("SD Configuration Commenced");
         bool sd_initialized = false;
@@ -1162,13 +1166,12 @@ void setup() {
         else {
             console_print("Weather not Enabled");
         }
-        // Initialize Watchdog Timer - DISABLED FOR TEST
-        console_print("Watchdog Timer DISABLED for RS485 testing");
-        // Timer0_Cfg = timerBegin(0, 80, true);                              // Timer 0, prescaler 80 (1MHz), count up
-        // timerAttachInterrupt(Timer0_Cfg, &resetModule, true);              // Attach ISR
-        // timerAlarmWrite(Timer0_Cfg, WDT_TiMEOUT * 1000000, false);         // Set alarm value in microseconds
-        // timerAlarmEnable(Timer0_Cfg);                                      // Enable the alarm
-        // console_print("Watchdog Timer Initialized - " + String(WDT_TiMEOUT) + " second timeout");
+        // Initialize Watchdog Timer
+        Timer0_Cfg = timerBegin(0, 80, true);                              // Timer 0, prescaler 80 (1MHz), count up
+        timerAttachInterrupt(Timer0_Cfg, &resetModule, true);              // Attach ISR
+        timerAlarmWrite(Timer0_Cfg, WDT_TiMEOUT * 1000000, false);         // Set alarm value in microseconds
+        timerAlarmEnable(Timer0_Cfg);                                      // Enable the alarm
+        console_print("Watchdog Timer Initialized - " + String(WDT_TiMEOUT) + " second timeout");
         digitalWrite(Blue_led_pin, LOW);
         
         // Log system information at startup (Issue #27 - Version Management)
@@ -1213,7 +1216,7 @@ void loop() {
         digitalWrite(Green_led_pin, HIGH);
         Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
     }
-    // timerWrite(Timer0_Cfg, 0);                                      // DISABLED FOR TEST
+    timerWrite(Timer0_Cfg, 0);                                      // Reset watchdog timer
     Check_WiFi();                                                   // check that the WiFi is still connected
     Check_Blue_Switch(false);
     Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
@@ -1277,12 +1280,37 @@ void Get_Variable_Data() {
  * @see Send_Request(), Receive(), KWS_Protocol.h
  */
 bool Get_Sensor() {
+    const int MAX_RETRIES = 3;
     for (int i = 0; i <= Number_of_RS485_Requests; i++) {
-        Send_Request(i);
-        if (!Receive(i)) {
-            console_print("RS485 - Failed to receive data for request " + String(i));
+        bool success = false;
+        for (int retry = 0; retry < MAX_RETRIES; retry++) {
+            RS485_total_attempts++;
+            Send_Request(i);
+            if (Receive(i)) {
+                success = true;
+                break;
+            }
+            // Failed - wait before retry with increasing delay
+            if (retry < MAX_RETRIES - 1) {
+                delay(75 + (retry * 25));  // 75ms, 100ms, 125ms
+            }
+        }
+        if (!success) {
+            RS485_field_failures[i]++;
+            RS485_total_failures++;
+            console_print("RS485 - Failed to receive data for request " + String(i) + " after " + String(MAX_RETRIES) + " attempts");
+            // Report statistics every 10 failures
+            if (RS485_total_failures % 10 == 0) {
+                console_print("RS485 Statistics: " + String(RS485_total_failures) + "/" + String(RS485_total_attempts) + 
+                             " failed (" + String((RS485_total_failures * 100) / RS485_total_attempts) + "%)" );
+                console_print("Field failures: " + String(RS485_field_failures[0]) + "," + String(RS485_field_failures[1]) + "," + 
+                             String(RS485_field_failures[2]) + "," + String(RS485_field_failures[3]) + "," + 
+                             String(RS485_field_failures[4]) + "," + String(RS485_field_failures[5]) + "," + 
+                             String(RS485_field_failures[6]) + "," + String(RS485_field_failures[7]));
+            }
             return false;
         }
+        delay(75);  // Delay between successful requests (increased from 50ms)
     }
     return true;
 }
@@ -2009,6 +2037,8 @@ void Write_New_Data_Record_to_Data_Files() {
             Latest_Gas_Time_With = "";
         }
     }
+    smartDelay(100);                                        // Keep LED visible for 100ms (maintains responsiveness)
+    toggleLED(Blue_led_pin);                                // Turn LED back off
 }
 void Check_SD_Space() {
     SD_freespace = (SD.totalBytes() - SD.usedBytes());
@@ -2545,7 +2575,7 @@ void Page_Header(bool refresh, String Header) {
     webpage += F("<style>ul{list-style-type:none;margin:0;padding:0;overflow:hidden;background-color:");
     webpage += F("#31c1f9; font-size:14px}");
     webpage += F("li{float:left;}");
-    webpage += F("li a{display:block;text-align:center;padding:5px 25px;text-decoration:none;}");
+    webpage += F("li a{display:block;text-align:center;padding:5px 15px;text-decoration:none;}");
     webpage += F("li a:hover{background-color:#FFFFFF;}");
     webpage += F("h1{background-color:White;}");
     webpage += F("body{width:");
@@ -2569,7 +2599,7 @@ void Page_Footer() {
     webpage += F("<li><a href='/WhatsApp'>WhatsApp Test</a></li>");
     webpage += F("<li><a href='/Reset'>Reset</a></li>");
     webpage += F("<li><a href='/Firmware'>Firmware</a></li>");
-    webpage += F("<li><a href='/ZipAllFiles'>ZipAllFiles</a>/li>");
+    webpage += F("<li><a href='/ZipAllFiles'>ZipAllFiles</a></li>");
     webpage += F("</ul>");
     webpage += F("<footer>");
     webpage += F("<p style='text-align: center;'>");
@@ -3242,8 +3272,9 @@ int Count_Files_on_SD_Drive() {
  * @see Receive(), RS485_Requests[][], RS485_BYTE_DELAY_MS
  */
 void Send_Request(int field) {
-    digitalWrite(RS485_RE_pin, LOW);                          // Disable RX (RE active HIGH, so LOW=disabled)
     digitalWrite(RS485_DE_pin, HIGH);                         // Enable TX (DE active HIGH)
+    digitalWrite(RS485_RE_pin, HIGH);                         // Also HIGH (replicating tied-together mode)
+    delayMicroseconds(50);                                    // Small delay for transceiver mode switch
     for (int x = 0; x < 7; x++) {
         RS485_Port.write(RS485_Requests[field][x]);                  // write the Request string to the RS485 Port
         delay(2);
@@ -3251,6 +3282,8 @@ void Send_Request(int field) {
     RS485_Port.write(RS485_Requests[field][7]);
     delay(10);                                                 // Wait for transmission to complete
     RS485_Port.flush();                                        // Ensure all bytes transmitted
+    digitalWrite(RS485_DE_pin, LOW);                           // Disable TX immediately after flush
+    delayMicroseconds(50);                                     // Small delay for transceiver mode switch
     while (RS485_Port.available()) RS485_Port.read();          // Flush echo from TX buffer
 }
 /**
@@ -3286,20 +3319,20 @@ bool Receive(int field) {
     unsigned long start_time;                                   // take the start time, used to check for time out
     long value[7] = { 0,0,0,0,0,0,0 };
     digitalWrite(RS485_DE_pin, LOW);                            // Disable TX (DE active HIGH, so LOW=disabled)
-    digitalWrite(RS485_RE_pin, HIGH);                           // Enable RX (RE active HIGH, so HIGH=enabled)
-    delay(20);                                                  // Wait for KWS to respond
+    digitalWrite(RS485_RE_pin, HIGH);                           // Enable RX (RE Active HIGH, so HIGH=enabled)
+    delayMicroseconds(100);                                     // Brief delay for transceiver stabilization
     start_time = millis();                                      // take the start time, used to check for time out
     int bytes_received = 0;  // DEBUG: Count bytes
     byte first_byte = 0;     // DEBUG: Capture first byte
     do {
-        // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
+        timerWrite(Timer0_Cfg, 0);  // Reset watchdog timer
         while (!RS485_Port.available()) {                                          // wait for some data to arrive
             if (millis() > start_time + (unsigned long)500) {         // no data received within 500 ms so timeout
                 console_print("RS485 TIMEOUT: field=" + String(field) + " - no response");
                 return false;  // Return failure instead of rebooting
             }
-            // timerWrite(Timer0_Cfg, 0);  // DISABLED FOR TEST
-            // yield();  // DISABLED FOR TEST
+            timerWrite(Timer0_Cfg, 0);  // Reset watchdog timer
+            yield();  // Allow ESP32 background tasks
         }
         value_status = true;                          // set the value status to true, which is true at this point
         while (RS485_Port.available()) {                                // Data is available so add them to Result
@@ -3416,10 +3449,9 @@ bool Receive(int field) {
         for (int x = 0; x < 8; x++) {
             Current_Data_Record.field.ltime[x] = Current_Time_With[x];
         }
-        console_print("RS485 OK: field=" + String(field) + " bytes=" + String(bytes_received) + " status=" + String(value_status));  // DEBUG
         return true;
     }
-    console_print("RS485 FAIL: field=" + String(field) + " bytes=" + String(bytes_received) + " 1st=0x" + String(first_byte, HEX) + " status=" + String(value_status));  // DEBUG
+    console_print("RS485 FAIL: field=" + String(field) + " bytes=" + String(bytes_received) + " 1st=0x" + String(first_byte, HEX) + " status=" + String(value_status));
     return false;
 }
 void Check_Blue_Switch(bool Month_End_Auto) {
