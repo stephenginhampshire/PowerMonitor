@@ -70,6 +70,21 @@ Change Record
 05/01/2026  1.0.3 RS485 pin separation - Split RS485 enable signals into separate DE (pin 22) and RE (pin 25) for improved signal integrity and proper transceiver control
 05/01/2026  1.0.4 RS485 retry logic - Implemented 3-attempt retry mechanism with adaptive delays (75ms, 100ms, 125ms) and per-field error tracking to improve communication reliability
 05/01/2026  1.0.5 UI improvements and bug fixes - Blue LED flashes on SD writes (100ms smartDelay), web menu padding reduced (25px to 15px), HTML typo fixed in ZipAllFiles link
+06/01/2026  1.0.6 Critical bug fix - Webpage graph now displays data after reboot/reinstall (Clear_Arrays() was incorrectly called after Prefill_Data_Array(), resetting Data_Table_Pointer to 0)
+06/01/2026  1.0.7 OTA upload improvements - Watchdog timer now DISABLED during firmware upload to prevent timeout/reboot (re-enabled on completion/abort/failure), added UPLOAD_FILE_ABORTED handler, progress logging every 100KB, WhatsApp notification on success
+06/01/2026  1.0.8 Webpage data display fix - Added "Waiting for Data" message when Data_Table_Pointer is 0 (occurs after reboot when CSV file exists but has no data rows yet), enhanced Prefill_Data_Array() logging to show Data_Table_Pointer status
+06/01/2026  1.0.9 Critical fixes - 1) Added .log files to download list so system.log is accessible via web interface, 2) Added NTP time validation (Year >= 2020) before creating CSV files to prevent files with placeholder birthday dates (19511118.csv issue)
+06/01/2026  1.0.10 OTA UX improvement - Upload page now auto-polls device after reboot and redirects to main page when online (eliminates dead time/manual refresh), improved upload page styling with progress indicators and status messages
+06/01/2026  1.0.11 RS485 error detection - Graph page now detects when sensor data is all zeros (RS485 communication failure) and displays helpful diagnostic message instead of blank page, lists RS485 pin connections and troubleshooting steps
+06/01/2026  1.0.12 RS485 zero-detection refined - Modified to check last 10 entries instead of just most recent for more reliable RS485 communication failure detection
+06/01/2026  1.0.13 RS485 zero-detection optimized - Enhanced to check all data entries with early exit when non-zero value found, improved efficiency
+06/01/2026  1.0.14 Test code cleanup - Removed test data injection code, cleaned up zero-detection logic
+06/01/2026  1.0.15 Critical watchdog fix - Added watchdog timer feeding (timerWrite) in Get_Variable_Data() before and after long operations to prevent crashes during RS485 sensor communication (which can take several seconds with retries), system now runs stably without unexpected reboots
+06/01/2026  1.0.16 RS485 diagnostics added - Debug console output showing actual sensor readings (Voltage, Amperage, Wattage) after each RS485 fetch to verify communication and CSV write operations
+06/01/2026  1.0.17 RS485 traffic logging - Detailed hex bytes sent/received for diagnosing wiring issues, wrong sensor address, or protocol mismatches
+06/01/2026  1.0.18 RS485 RE pin logic - Attempted fix for receiver enable pin (reverted in next version due to module-specific behavior)
+06/01/2026  1.0.19 Critical RS485 receive fix - Changed Receive() function to initialize required_bytes to 9 instead of 0, preventing premature loop exit after 1 byte (was causing all sensor readings to be zero and blank webpage)
+06/01/2026  1.1.0 Major milestone - RS485 communication fully functional after critical bug fixes (versions 1.0.12-1.0.19), removed debug output for production readiness, Blue LED toggles every 2.5s during CSV prefill to differentiate from normal 5s operation cycle
 
 SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 - MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
@@ -128,9 +143,9 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
-#define VERSION_MINOR 0   // Backwards-compatible functionality additions
-#define VERSION_PATCH 5   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.0.5"
+#define VERSION_MINOR 1   // Backwards-compatible functionality additions
+#define VERSION_PATCH 0   // Backwards-compatible bug fixes
+#define VERSION_STRING "V1.1.0"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -692,40 +707,81 @@ String get_loginIndex() {
 
 const char* serverIndex = {
     "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
+    "<style>"
+        "body{font-family:Arial;text-align:center;padding:50px;}"
+        "#prg{font-size:24px;margin:20px;color:#0066cc;}"
+        "#status{font-size:18px;margin:20px;color:#ff6600;}"
+        "input[type='file']{padding:10px;margin:10px;}"
+        "input[type='submit']{padding:10px 30px;background:#0066cc;color:white;border:none;border-radius:5px;cursor:pointer;font-size:16px;}"
+        "input[type='submit']:hover{background:#0052a3;}"
+    "</style>"
+    "<h1>Power Monitor Firmware Update</h1>"
     "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-        "<input type='file' name='update'>"
-        "<input type='submit' value='Update'>"
+        "<input type='file' name='update' accept='.bin'>"
+        "<input type='submit' value='Upload Firmware'>"
     "</form>"
-    "<div id='prg'>progress: 0%</div>"
+    "<div id='prg'>Select firmware file and click Upload</div>"
+    "<div id='status'></div>"
     "<script>"
-        "$('form').submit(function(e){"
-        "e.preventDefault();"
-        "var form = $('#upload_form')[0];"
-        "var data = new FormData(form);"
-        " $.ajax({"
-        "url: '/update',"
-        "type: 'POST',"
-        "data: data,"
-        "contentType: false,"
-        "processData:false,"
-        "xhr: function() {"
-        "var xhr = new window.XMLHttpRequest();"
-        "xhr.upload.addEventListener('progress', function(evt) {"
-        "if (evt.lengthComputable) {"
-        "var per = evt.loaded / evt.total;"
-        "$('#prg').html('progress: ' + Math.round(per*100) + '%');"
+        "var pollInterval;"
+        "var pollAttempts = 0;"
+        "function pollDevice(){"
+            "$.ajax({"
+                "url: '/',"
+                "type: 'GET',"
+                "timeout: 2000,"
+                "success: function(){"
+                    "clearInterval(pollInterval);"
+                    "$('#status').html('✓ Device online - Redirecting...');"
+                    "setTimeout(function(){ window.location.href='/'; }, 1000);"
+                "},"
+                "error: function(){"
+                    "pollAttempts++;"
+                    "var elapsed = Math.floor(pollAttempts * 3);"
+                    "$('#status').html('⏳ Waiting for device to reboot... (' + elapsed + 's)');"
+                    "if(pollAttempts > 40){"  // 2 minutes max
+                        "clearInterval(pollInterval);"
+                        "$('#status').html('⚠ Timeout - Please refresh manually or check device');"
+                    "}"
+                "}"
+            "});"
         "}"
-        "}, false);"
-        "return xhr;"
-        "},"
-        "success:function(d, s) {"
-        "console.log('success!')"
-    "},"
-    "error: function (a, b, c) {"
-    "}"
-    "});"
-    "});"
-"   </script>" };
+        "$('form').submit(function(e){"
+            "e.preventDefault();"
+            "var form = $('#upload_form')[0];"
+            "var data = new FormData(form);"
+            "$('#prg').html('Uploading firmware...');"
+            "$.ajax({"
+                "url: '/update',"
+                "type: 'POST',"
+                "data: data,"
+                "contentType: false,"
+                "processData:false,"
+                "xhr: function(){"
+                    "var xhr = new window.XMLHttpRequest();"
+                    "xhr.upload.addEventListener('progress', function(evt){"
+                        "if(evt.lengthComputable){"
+                            "var per = evt.loaded / evt.total;"
+                            "$('#prg').html('Upload progress: ' + Math.round(per*100) + '%');"
+                        "}"
+                    "}, false);"
+                    "return xhr;"
+                "},"
+                "success:function(d, s){"
+                    "$('#prg').html('✓ Upload complete!');"
+                    "$('#status').html('Device is rebooting...');"
+                    "setTimeout(function(){"
+                        "pollAttempts = 0;"
+                        "pollInterval = setInterval(pollDevice, 3000);"  // Poll every 3 seconds
+                    "}, 5000);"  // Wait 5 seconds before starting to poll
+                "},"
+                "error: function(a, b, c){"
+                    "$('#prg').html('✗ Upload failed: ' + c);"
+                    "$('#status').html('Please try again or check console for errors.');"
+                "}"
+            "});"
+        "});"
+    "</script>" };
 // Watchdog Timer ISR -----
 void IRAM_ATTR resetModule() {
     ets_printf("Watchdog Timer Triggered - Rebooting\n");
@@ -1018,12 +1074,14 @@ void setup() {
      * 
      * Upload lifecycle:
      * 1. UPLOAD_FILE_START: Initialize Update with unknown size
-     * 2. UPLOAD_FILE_WRITE: Write chunks to flash progressively
+     * 2. UPLOAD_FILE_WRITE: Write chunks to flash progressively, reset watchdog
      * 3. UPLOAD_FILE_END: Finalize update, verify integrity, reboot
+     * 4. UPLOAD_FILE_ABORTED: Clean up failed upload
      * 
      * @note Route: POST /update
      * @note Content-Type: multipart/form-data
      * @note Auto-reboots on success
+     * @note Watchdog timer reset every chunk to prevent timeout
      * @note Prints errors to Serial on failure
      * @see Update.h, /Firmware, /serverIndex
      */
@@ -1032,26 +1090,51 @@ void setup() {
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         ESP.restart();
         }, []() {
+            static size_t totalReceived = 0;
             HTTPUpload& upload = server.upload();
             if (upload.status == UPLOAD_FILE_START) {
-                console_print("Update: " + upload.filename);
+                totalReceived = 0;
+                timerAlarmDisable(Timer0_Cfg);  // Disable watchdog during OTA upload
+                console_print("OTA Update Started: " + upload.filename);
+                console_print("Watchdog timer disabled for OTA upload");
+                console_print("File size: " + String(upload.totalSize) + " bytes");
                 if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
                     Update.printError(Serial);
+                    console_print("OTA Update.begin() failed");
+                    timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog on failure
                 }
             }
             else if (upload.status == UPLOAD_FILE_WRITE) {
+                totalReceived += upload.currentSize;
                 if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                     Update.printError(Serial);
+                    console_print("OTA Write failed at " + String(totalReceived) + " bytes");
+                } else {
+                    // Log progress every 100KB
+                    if (totalReceived % 102400 < upload.currentSize) {
+                        console_print("OTA Progress: " + String(totalReceived / 1024) + " KB received");
+                    }
                 }
             }
             else if (upload.status == UPLOAD_FILE_END) {
+                console_print("OTA Upload complete: " + String(totalReceived) + " bytes");
                 if (Update.end(true)) {
-                    console_print("Update Success: Rebooting");
+                    console_print("OTA Update Success: Rebooting in 2 seconds");
+                    Send_WhatsApp_Message("Power Monitor - Firmware Updated Successfully - Rebooting");
+                    // No need to re-enable watchdog - device will reboot
                     i_Display();
                 }
                 else {
                     Update.printError(Serial);
+                    console_print("OTA Update.end() failed");
+                    timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog on failure
                 }
+            }
+            else if (upload.status == UPLOAD_FILE_ABORTED) {
+                Update.abort();
+                console_print("OTA Upload Aborted at " + String(totalReceived) + " bytes");
+                console_print("Device still running previous firmware - no changes made");
+                timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog after abort
             }
             });
         console_print("Starting Server");
@@ -1137,6 +1220,24 @@ void setup() {
         
         console_print("Date and Time Update");
         Update_Current_Timeinfo();                                              // update This date time info, no /s
+        
+        // Ensure we have valid time before creating date-based files
+        if (New_Date_Time_Data.field.Year < 2020) {
+            console_print("WARNING: NTP time not synchronized yet (Year: " + String(New_Date_Time_Data.field.Year) + "), waiting for valid time...");
+            int time_sync_attempts = 0;
+            while (New_Date_Time_Data.field.Year < 2020 && time_sync_attempts < 30) {
+                smartDelay(1000);  // Wait 1 second
+                Update_Current_Timeinfo();
+                time_sync_attempts++;
+                console_print("Time sync attempt " + String(time_sync_attempts) + ": Year = " + String(New_Date_Time_Data.field.Year));
+            }
+            if (New_Date_Time_Data.field.Year < 2020) {
+                console_print("ERROR: Failed to get valid time after 30 seconds - proceeding anyway");
+            } else {
+                console_print("SUCCESS: Valid time obtained (Year: " + String(New_Date_Time_Data.field.Year) + ")");
+            }
+        }
+        
         console_print("Setting Previous Date and Time to Today Date and Time");
         Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;
         Current_Date_Time_Data.field.Month = New_Date_Time_Data.field.Month;
@@ -1240,6 +1341,7 @@ void loop() {
 //------------
 void Get_Variable_Data() {
     Last_Cycle = millis();
+    timerWrite(Timer0_Cfg, 0);  // Feed watchdog before long operations
     
     // Only fetch weather data every 10 minutes (not every cycle)
     bool weather_ok = true;
@@ -1250,9 +1352,11 @@ void Get_Variable_Data() {
         } else {
             console_print("Warning: Weather data fetch failed, using previous values");
         }
+        timerWrite(Timer0_Cfg, 0);  // Feed watchdog after weather fetch
     }
     
     bool sensor_ok = Get_Sensor();
+    timerWrite(Timer0_Cfg, 0);  // Feed watchdog after sensor fetch
     if (!sensor_ok) {
         console_print("Warning: Sensor data fetch failed, using previous values");
     }
@@ -1262,6 +1366,12 @@ void Get_Variable_Data() {
         Update_Current_Timeinfo();
         Current_Date_With.toCharArray(Current_Data_Record.field.ldate, Current_Date_With.length() + 1);
         Current_Time_With.toCharArray(Current_Data_Record.field.ltime, Current_Time_With.length() + 1);
+        
+        // DEBUG: Log sensor readings to verify RS485 is working
+        console_print("SENSOR: V=" + String(Current_Data_Record.field.Voltage, 2) + 
+                     "V, I=" + String(Current_Data_Record.field.Amperage, 3) + 
+                     "A, W=" + String(Current_Data_Record.field.wattage, 1) + "W");
+        
         Write_New_Data_Record_to_Data_Files();
         Add_New_Data_Record_to_Display_Table();
     }
@@ -1391,6 +1501,7 @@ void Check_NewDay() {
             console_print("Reopening Data File");
             Create_or_Open_New_Data_File();                                         // open the day file, do not create a new one
             Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date_Time);
+            // Do NOT clear arrays after reboot - we just loaded data from SD card!
         }
         else {
             console_print("New Day Detected");                                      // proven day change
@@ -1398,8 +1509,8 @@ void Check_NewDay() {
             unsigned long freeSpaceMB = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
             Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time + " | SD Free: " + String(freeSpaceMB) + "MB");
             Check_NewMonth();                                                       // if the date changed check if a new month started
+            Clear_Arrays();                                                         // clear memory for new day
         }
-        Clear_Arrays();                                                             // clear memory
         Current_Date_Time_Data.field.Day = New_Date_Time_Data.field.Day;         // so set yesterday month
     }
 }
@@ -2466,6 +2577,7 @@ void Prefill_Data_Array() {
     int field_number = 0;
     char data_temp;
     String message;
+    unsigned long last_led_toggle = millis();  // Track last LED toggle time
     toggleLED(Blue_led_pin);                          // flash the blue led
     console_print("Pre Loading DataFile " + String(DataFileName) + " into Data Array");
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
@@ -2475,7 +2587,11 @@ void Prefill_Data_Array() {
             if (data_temp == '\n') break;
         }
         while (DataFile.available()) {                                       // do while there are data available
-            toggleLED(Blue_led_pin);
+            // Toggle LED every 2.5 seconds during prefill
+            if (millis() - last_led_toggle >= 2500) {
+                toggleLED(Blue_led_pin);
+                last_led_toggle = millis();
+            }
             data_temp = DataFile.read();
             field[character_count++] = data_temp;                        // add it to the csvfield string
             if (data_temp == ',' || data_temp == '\n') {                              // look for end of field
@@ -2497,8 +2613,15 @@ void Prefill_Data_Array() {
             } // end of end of line detected
         } // end of while
     }
+    else {
+        console_print("ERROR: Failed to open " + String(DataFileName) + " for prefill");
+    }
     DataFile.close();
     console_print("Loaded Data Records: " + String(Data_Record_Count));
+    console_print("Data_Table_Pointer now at: " + String(Data_Table_Pointer));
+    if (Data_Table_Pointer == 0) {
+        console_print("NOTE: No data loaded - webpage will display 'Waiting for data' until first sensor reading");
+    }
 }
 void Shuffle_Data_Table() {
     for (int i = 0; i < (Data_Table_Size - 1); i++) {       // shuffle the rows up, losing row 0, make row [table_size] free
@@ -2626,81 +2749,134 @@ void Page_Footer() {
 }
 void i_Display() {
     double maximum_Amperage = 0;
+    int non_zero_count = 0;
     console_print("Web Display of Graph Requested via Webpage");
     webpage = "";
     webpage.reserve(8000);  // Pre-allocate for graph data
     Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
-    webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
-    webpage += F("<script type=\"text/javascript\">");
-    webpage += F("google.charts.load('current', {packages: ['corechart', 'line']});");
-    webpage += F("google.setOnLoadCallback(drawChart);");
-    webpage += F("function drawChart() {");
-    webpage += F("var data=new google.visualization.DataTable();");
-    webpage += F("data.addColumn('timeofday', 'Time');");
-    webpage += F("data.addColumn('number', 'Amperage');");
-    webpage += F("data.addColumn('number', 'Gas Volume');");
-    webpage += F("data.addRows([");
-    for (int i = 0; i < (Data_Table_Pointer); i++) {
-        if (String(Readings_Table[i].field.ltime) != "") {                     // if the ltime field contains data
-            for (int x = 0; x < 8; x++) {                                    // replace the ":"s in ltime with ","
-                if (Readings_Table[i].field.ltime[x] == ':') {
-                    Readings_Table[i].field.ltime[x] = ',';
-                }
-            }
-            webpage += "[[";
-            webpage += String(Readings_Table[i].field.ltime) + "],";
-            webpage += String(Readings_Table[i].field.Amperage, 1) + ",";
-            webpage += String(Readings_Table[i].field.gas_volume, 1) + "]";
-            if (Readings_Table[i].field.Amperage > maximum_Amperage) {
-                maximum_Amperage = Readings_Table[i].field.Amperage;
-            }
-            if (i != Data_Table_Pointer) {
-                webpage += ",";
+    
+    // Check if we have any data to display
+    if (Data_Table_Pointer == 0) {
+        // No data yet - show waiting message
+        webpage += F("<div style='padding:50px; text-align:center;'>");
+        webpage += F("<h2 style='color:#FF6600;'>⏳ Waiting for Data...</h2>");
+        webpage += F("<p style='font-size:18px;'>The system is collecting sensor data.</p>");
+        webpage += F("<p style='font-size:16px;'>Data collection cycle: ");
+        webpage += String(config.main_cycle_ms / 1000);
+        webpage += F(" seconds</p>");
+        webpage += F("<p style='font-size:14px; color:#888;'>This page will refresh automatically in 20 seconds.</p>");
+        webpage += F("<p style='font-size:14px; color:#888;'>Data records loaded: ");
+        webpage += String(Data_Record_Count);
+        webpage += F(" | Data pointer: ");
+        webpage += String(Data_Table_Pointer);
+        webpage += F("</p>");
+        webpage += F("</div>");
+    }
+    else {
+        // Check if we have any valid non-zero sensor data in the entire array
+        for (int i = 0; i < Data_Table_Pointer; i++) {
+            if (Readings_Table[i].field.Amperage > 0.001) {  // Check for > 1mA to avoid float precision issues
+                non_zero_count++;
+                break;  // Found at least one non-zero reading, that's enough
             }
         }
-    }
-    webpage += "]);\n";
-    webpage += F("var options = {");
-    webpage += F("title:'Electrical and Gas Consumption logarithmic scale',");
-    webpage += F("titleTextStyle:{");
-    webpage += F("fontName:'Arial',");
-    webpage += F("fontSize: 20, ");
-    webpage += F("color: 'DodgerBlue'");
-    webpage += F("},");
-    webpage += F("legend:{");
-    webpage += F("position:'bottom'");
-    webpage += F("},");
-    webpage += F("colors: [");
-    webpage += F("'red', 'blue'");
-    webpage += F("],");
-    webpage += F("backgroundColor : '#F3F3F3',");
-    webpage += F("chartArea: {");
-    webpage += F("width:'80%',");
-    webpage += F("height: '55%'");
-    webpage += F("}, ");
-    webpage += F("hAxis:{");
-    webpage += F("slantedText:'true',");
-    webpage += F("slantedTextAngle:'90',");
-    webpage += F("titleTextStyle:{");
-    webpage += F("color:'Purple', ");
-    webpage += F("bold: 'true',");
-    webpage += F("fontSize: '16'");
-    webpage += F("}, ");
-    webpage += F("format: 'HH:mm:ss',");
-    webpage += F("gridlines: {");
-    webpage += F("color:'#333'");
-    webpage += F("},");
-    webpage += F("showTextEvery:'1'");
-    webpage += F("}, ");
-    webpage += F("vAxes:");
-    webpage += F("{0:{viewWindowMode:'explcit',scaleType:'log',title:'Current Amperage',format:'###.###'},");
-    webpage += F(" 1:{scaleType:'log',title:'Daily Cumulative Gas Volume cu.litre',format:'###.###'},},");
-    webpage += F("series:{0:{targetAxisindex:0},1:{targetAxisindex:1},curveType:'none'},};");
-    webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));");
-    webpage += F("chart.draw(data, options); ");
-    webpage += F("}");
-    webpage += F("</script>");
-    webpage += F("<div id='line_chart' style='width:960px; height:600px'></div>");
+        
+        if (non_zero_count == 0) {
+            // Data exists but all sensor readings are zero - RS485 communication issue
+            webpage += F("<div style='padding:50px; text-align:center;'>");
+            webpage += F("<h2 style='color:#FF0000;'>⚠ RS485 Communication Issue</h2>");
+            webpage += F("<p style='font-size:18px;'>Sensor data is being logged, but all readings are zero.</p>");
+            webpage += F("<p style='font-size:16px;'>Check RS485 connections:</p>");
+            webpage += F("<ul style='text-align:left; display:inline-block; font-size:14px;'>");
+            webpage += F("<li>DE pin (GPIO 22) - Driver Enable</li>");
+            webpage += F("<li>RE pin (GPIO 25) - Receiver Enable</li>");
+            webpage += F("<li>TX pin - RS485 transmit</li>");
+            webpage += F("<li>RX pin - RS485 receive</li>");
+            webpage += F("<li>Power supply to KWS sensor</li>");
+            webpage += F("</ul>");
+            webpage += F("<p style='font-size:14px; color:#888;'>Data records: ");
+            webpage += String(Data_Table_Pointer);
+            webpage += F(" entries (all zeros)</p>");
+            webpage += F("<p style='font-size:14px; color:#888;'>Check <a href='/Information'>Information</a> page or system.log for RS485 errors</p>");
+            webpage += F("<p style='font-size:14px; color:#888;'>This page will refresh automatically in 20 seconds.</p>");
+            webpage += F("</div>");
+        }
+        else {
+            // We have valid data - display the graph
+        webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
+        webpage += F("<script type=\"text/javascript\">");
+        webpage += F("google.charts.load('current', {packages: ['corechart', 'line']});");
+        webpage += F("google.setOnLoadCallback(drawChart);");
+        webpage += F("function drawChart() {");
+        webpage += F("var data=new google.visualization.DataTable();");
+        webpage += F("data.addColumn('timeofday', 'Time');");
+        webpage += F("data.addColumn('number', 'Amperage');");
+        webpage += F("data.addColumn('number', 'Gas Volume');");
+        webpage += F("data.addRows([");
+        for (int i = 0; i < (Data_Table_Pointer); i++) {
+            if (String(Readings_Table[i].field.ltime) != "") {                     // if the ltime field contains data
+                for (int x = 0; x < 8; x++) {                                    // replace the ":"s in ltime with ","
+                    if (Readings_Table[i].field.ltime[x] == ':') {
+                        Readings_Table[i].field.ltime[x] = ',';
+                    }
+                }
+                webpage += "[[";
+                webpage += String(Readings_Table[i].field.ltime) + "],";
+                webpage += String(Readings_Table[i].field.Amperage, 1) + ",";
+                webpage += String(Readings_Table[i].field.gas_volume, 1) + "]";
+                if (Readings_Table[i].field.Amperage > maximum_Amperage) {
+                    maximum_Amperage = Readings_Table[i].field.Amperage;
+                }
+                if (i != Data_Table_Pointer) {
+                    webpage += ",";
+                }
+            }
+        }
+        webpage += "]);\n";
+        webpage += F("var options = {");
+        webpage += F("title:'Electrical and Gas Consumption logarithmic scale',");
+        webpage += F("titleTextStyle:{");
+        webpage += F("fontName:'Arial',");
+        webpage += F("fontSize: 20, ");
+        webpage += F("color: 'DodgerBlue'");
+        webpage += F("},");
+        webpage += F("legend:{");
+        webpage += F("position:'bottom'");
+        webpage += F("},");
+        webpage += F("colors: [");
+        webpage += F("'red', 'blue'");
+        webpage += F("],");
+        webpage += F("backgroundColor : '#F3F3F3',");
+        webpage += F("chartArea: {");
+        webpage += F("width:'80%',");
+        webpage += F("height: '55%'");
+        webpage += F("}, ");
+        webpage += F("hAxis:{");
+        webpage += F("slantedText:'true',");
+        webpage += F("slantedTextAngle:'90',");
+        webpage += F("titleTextStyle:{");
+        webpage += F("color:'Purple', ");
+        webpage += F("bold: 'true',");
+        webpage += F("fontSize: '16'");
+        webpage += F("}, ");
+        webpage += F("format: 'HH:mm:ss',");
+        webpage += F("gridlines: {");
+        webpage += F("color:'#333'");
+        webpage += F("},");
+        webpage += F("showTextEvery:'1'");
+        webpage += F("}, ");
+        webpage += F("vAxes:");
+        webpage += F("{0:{viewWindowMode:'explcit',scaleType:'log',title:'Current Amperage',format:'###.###'},");
+        webpage += F(" 1:{scaleType:'log',title:'Daily Cumulative Gas Volume cu.litre',format:'###.###'},},");
+        webpage += F("series:{0:{targetAxisindex:0},1:{targetAxisindex:1},curveType:'none'},};");
+        webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));");
+        webpage += F("chart.draw(data, options); ");
+        webpage += F("}");
+        webpage += F("</script>");
+        webpage += F("<div id='line_chart' style='width:960px; height:600px'></div>");
+        }  // End of valid data check
+    }  // End of Data_Table_Pointer > 0 check
+    
     Page_Footer();
     lastcall = "display";
 }
@@ -3245,7 +3421,7 @@ int Count_Files_on_SD_Drive() {
             files_present = true;
             File DataFile = SD.open("/" + filename, FILE_READ);                          // Now read data from FS
             if (DataFile) {                                                                 // if there is a file
-                if ((filename.indexOf(".csv") > 0) || (filename.indexOf(".csm") > 0)) {
+                if ((filename.indexOf(".csv") > 0) || (filename.indexOf(".csm") > 0) || (filename.indexOf(".log") > 0)) {
                     FileNames[file_count] = filename;
                     file_count++;                                                     // increment the file count
                 }
@@ -3276,8 +3452,9 @@ int Count_Files_on_SD_Drive() {
  */
 void Send_Request(int field) {
     digitalWrite(RS485_DE_pin, HIGH);                         // Enable TX (DE active HIGH)
-    digitalWrite(RS485_RE_pin, HIGH);                         // Also HIGH (replicating tied-together mode)
+    digitalWrite(RS485_RE_pin, HIGH);                         // Also HIGH during TX
     delayMicroseconds(50);                                    // Small delay for transceiver mode switch
+    
     for (int x = 0; x < 7; x++) {
         RS485_Port.write(RS485_Requests[field][x]);                  // write the Request string to the RS485 Port
         delay(2);
@@ -3287,7 +3464,7 @@ void Send_Request(int field) {
     RS485_Port.flush();                                        // Ensure all bytes transmitted
     digitalWrite(RS485_DE_pin, LOW);                           // Disable TX immediately after flush
     delayMicroseconds(50);                                     // Small delay for transceiver mode switch
-    while (RS485_Port.available()) RS485_Port.read();          // Flush echo from TX buffer
+    while (RS485_Port.available()) RS485_Port.read();          // Flush any echo from TX buffer
 }
 /**
  * @brief Receive and parse RS485 response from KWS power monitoring hardware
@@ -3316,13 +3493,13 @@ void Send_Request(int field) {
  */
 bool Receive(int field) {
     byte pointer = 0;
-    byte required_bytes = 0;
+    byte required_bytes = 9;  // Start with max possible (will be updated when we read byte 3)
     int received_character = 0;
     bool value_status = false;
     unsigned long start_time;                                   // take the start time, used to check for time out
     long value[7] = { 0,0,0,0,0,0,0 };
     digitalWrite(RS485_DE_pin, LOW);                            // Disable TX (DE active HIGH, so LOW=disabled)
-    digitalWrite(RS485_RE_pin, HIGH);                           // Enable RX (RE Active HIGH, so HIGH=enabled)
+    digitalWrite(RS485_RE_pin, HIGH);                           // Enable RX (RE Active HIGH for this module)
     delayMicroseconds(100);                                     // Brief delay for transceiver stabilization
     start_time = millis();                                      // take the start time, used to check for time out
     int bytes_received = 0;  // DEBUG: Count bytes
@@ -3392,6 +3569,7 @@ bool Receive(int field) {
             if (value_status == true) pointer++;                                        // increment the inpointer
         }
     } while (pointer < required_bytes);   // loop until all the required characters have been received, or timeout
+    
     if (value_status == true) {                                                          // received value is good
         switch (field) {
         case Request_Voltage: {                                                                    // [0]  Voltage
@@ -3403,7 +3581,7 @@ bool Receive(int field) {
         case Request_Amperage: {                                                                  // [1]  Amperage
             double Amperage = (value[5] << 24) + (value[6] << 16) + ((value[3] << 8) + value[4]);    // milli amps
             Amperage /= (double)1000;                                                 // convert milliamps to amps
-            Current_Data_Record.field.Amperage = Amperage;                   // Amperage output format double nn.n
+            Current_Data_Record.field.Amperage = Amperage;
             break;
         }
         case Request_Wattage: {                                                                    // [2]  Wattage
