@@ -143,9 +143,10 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
-#define VERSION_MINOR 1   // Backwards-compatible functionality additions
-#define VERSION_PATCH 0   // Backwards-compatible bug fixes
-#define VERSION_STRING "V1.1.0"
+#define VERSION_MINOR 3   // Backwards-compatible functionality additions
+#define VERSION_PATCH 2   // Backwards-compatible bug fixes
+// 14/04/2026  1.3.2 Daily/reboot WhatsApp messages now include web IP and mDNS hostname; unique device hostname advertised for network scanners
+#define VERSION_STRING "V1.3.2"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -375,7 +376,7 @@ bool WhatsApp_Enabled = true;
 //bool WhatsApp_Debug = true;
 //String WhatsApp_url_1 = "https://api.callmebot.com/whatsapp.php?phone=+447785938200&text=";
 //String WhatsApp_url_2 = "&apikey=8876034";
-String hostname = "Power Monitor " VERSION_STRING;
+String hostname = "power-monitor";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 3600;                         // offset for the date and time function
 const String WiFi_Status_Message[7] = {
@@ -1013,12 +1014,15 @@ void setup() {
     // WiFi and Web Setup -------------
     console_print("WiFi Configuration Commenced");
     WiFi.mode(WIFI_STA);
+    hostname = Build_Device_Hostname();
+    console_print("Device Hostname: " + hostname);
     WiFi.setHostname(hostname.c_str());         //define hostname
     StartWiFi(SSID, Password);                  // Start WiFi
     initTime("GMT0BST,M3.5.0/1,M10.5.0");       // initialise Time library to London, GMT0BST,M3.5.0/1,M10.5.0
     console_print("Starting Server");
     server.begin();                             // Start Webserver
     console_print("Server Started");
+    StartMDNSService();
     server.on("/", i_Display);
     /**
      * @brief OTA firmware update login endpoint
@@ -1318,7 +1322,7 @@ void loop() {
         console_print("Main Process Now Running");
         Once = true;
         digitalWrite(Green_led_pin, HIGH);
-        Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time);
+        Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time + " | " + Get_Web_Interface_Address());
     }
     timerWrite(Timer0_Cfg, 0);                                      // Reset watchdog timer
     Check_WiFi();                                                   // check that the WiFi is still connected
@@ -1497,17 +1501,18 @@ bool Get_Weather() {
 void Check_NewDay() {
     Update_Current_Timeinfo();                                                      // update the Today_Date and Time
     if ((New_Date_Time_Data.field.Day != Current_Date_Time_Data.field.Day)) {       // is the day different to previous day
+        String webAddress = Get_Web_Interface_Address();
         if (Current_Date_Time_Data.field.Day < 1 || Current_Date_Time_Data.field.Day > 31) { // if the Previous Date not set, we have rebooted
             console_print("Reopening Data File");
             Create_or_Open_New_Data_File();                                         // open the day file, do not create a new one
-            Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date_Time);
+            Send_WhatsApp_Message("Power Monitor - Day Data File Reopened " + Standard_Format_Date_Time + " | " + webAddress);
             // Do NOT clear arrays after reboot - we just loaded data from SD card!
         }
         else {
             console_print("New Day Detected");                                      // proven day change
             Create_or_Open_New_Data_File();                                         // create a new day file
             unsigned long freeSpaceMB = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
-            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time + " | SD Free: " + String(freeSpaceMB) + "MB");
+            Send_WhatsApp_Message("Power Monitor - New Day Data File Opened " + Standard_Format_Date_Time + " | SD Free: " + String(freeSpaceMB) + "MB | " + webAddress);
             Check_NewMonth();                                                       // if the date changed check if a new month started
             Clear_Arrays();                                                         // clear memory for new day
         }
@@ -2397,6 +2402,38 @@ int StartWiFi(String ssid, String password) {
     console_print("WiFi Signal Strength:" + String(WiFi_Signal_Strength));
     console_print("WiFi IP Address: " + String(WiFi.localIP().toString().c_str()));
     return true;
+}
+String Get_Web_Interface_Address() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return "Web: unavailable";
+    }
+
+    String localIp = WiFi.localIP().toString();
+    if (localIp.length() == 0 || localIp == "0.0.0.0") {
+        return "Web: unavailable";
+    }
+
+    String webAddress = "Web: http://" + localIp + "/";
+    if (hostname.length() > 0) {
+        webAddress += " | Name: http://" + hostname + ".local/";
+    }
+
+    return webAddress;
+}
+String Build_Device_Hostname() {
+    uint32_t suffix = (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF);
+    char hostnameBuffer[32];
+    snprintf(hostnameBuffer, sizeof(hostnameBuffer), "power-monitor-%06X", suffix);
+    return String(hostnameBuffer);
+}
+void StartMDNSService() {
+    if (!MDNS.begin(hostname.c_str())) {
+        console_print("mDNS responder failed for " + hostname);
+        return;
+    }
+
+    MDNS.addService("http", "tcp", 80);
+    console_print("mDNS responder started: http://" + hostname + ".local/");
 }
 void initTime(String timezone) {
     console_print("Starting Time Server");

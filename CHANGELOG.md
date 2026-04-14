@@ -5,6 +5,39 @@ All notable changes to the Power Monitor project will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-04-14
+
+### Added
+- Unique scanner-friendly device hostname generated from chip ID (format: `power-monitor-XXXXXX`)
+- mDNS HTTP service advertisement for direct hostname access (`http://power-monitor-XXXXXX.local/`)
+
+### Changed
+- Daily WhatsApp notifications now include both:
+  - Current web IP URL (`http://<ip>/`)
+  - mDNS hostname URL (`http://power-monitor-XXXXXX.local/`)
+- Reboot WhatsApp notification now includes the same IP + hostname web address block
+
+## [1.3.1] - 2026-02-15
+
+### Fixed
+- **CRITICAL**: WiFi crash on boot (Guru Meditation Error) caused by premature web server access
+  - Removed `smartDelay()` call during WiFi initialization (server not yet initialized)
+  - Removed premature watchdog timer access (Timer0_Cfg NULL during startup)
+  - WiFi now connects reliably on first attempt
+- WiFi reconnection reliability after firmware uploads
+  - Added complete WiFi reset sequence: disconnect(true) → mode(WIFI_OFF) → mode(WIFI_STA)
+  - Disabled WiFi sleep mode for better connection stability
+  - Extended connection timeout from 60s to 120s (40 attempts × 3s)
+
+### Changed
+- Date display format changed from yyyy/mm/dd to dd/mm/yy (British format)
+  - Applies to all web page headers and information page statistics
+  - Internal date format (yyyy/mm/dd) preserved for file operations and CSV storage
+  - Added `Format_Date_For_Display()` helper function for consistent formatting
+
+### Notes
+This release resolves critical WiFi stability issues that prevented the system from reconnecting after firmware uploads and fixes a boot crash related to initialization order.
+
 ## [1.1.0] - 2026-01-06
 
 ### Fixed
