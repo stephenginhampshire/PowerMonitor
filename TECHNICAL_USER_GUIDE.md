@@ -1,7 +1,18 @@
 # Power Monitor Technical User Guide
-## Version 1.0.5
+## Version 1.1.1
 
 ## Changelog
+
+### Version 1.1.1 (April 15, 2026)
+- **Web Chart Improvements**:
+  - Dynamic linear Y-axis scaling for improved detail in the normal 2-4A range
+  - Horizontal slider retained for panning older/newer data windows
+- **Feature Cleanup**:
+  - Gas monitoring disabled in runtime logic
+  - CSV file format preserved for backward compatibility
+- **OTA Reliability**:
+  - Upload response completes before reboot to reduce false failure reports
+  - Browser reconnect flow handles reboot window more reliably
 
 ### Version 1.0.5 (January 5, 2026)
 - **RS485 Communication Improvements**:
@@ -35,6 +46,7 @@ The Power Monitor is a comprehensive energy monitoring system that:
 - **Real-time Monitoring**: 5-second polling interval (configurable)
 - **Data Logging**: CSV files with 20 data fields per record
 - **Web Interface**: Full-featured HTTP server with multiple pages
+- **Chart Navigation**: Dynamic linear Y-axis scaling and horizontal time-window slider
 - **Remote Notifications**: WhatsApp integration via CallMeBot API
 - **Weather Correlation**: OpenWeatherMap API integration
 - **File Management**: Download, delete, and consolidate data files
@@ -150,7 +162,7 @@ Every 5 seconds (configurable via `config.main_cycle_ms`):
 |    17    |   RS485 TX     |   Output  | RS485 transmit to KWS meter    |
 |    18    |      SCK       |   Output  |     SD card SPI clock          |
 |    19    |     MISO       |   Input   |     SD card SPI data in        |
-|    21    |  Gas Switch    |   Input   | Gas meter pulse (0.1m³/pulse)   |
+|    21    |  Reserved      |   Input   | Reserved (gas feature disabled) |
 |    22    |  RS485 DE      |   Output  | RS485 Driver Enable (TX ctrl)   |
 |    23    |     MOSI       |   Output  |    SD card SPI data out        |
 |    25    |  RS485 RE      |   Output  | RS485 Receiver Enable (RX ctrl) |
@@ -230,11 +242,11 @@ struct Readings_Table_struct {
 Readings_Table_struct Readings_Table[8];  // Ring buffer for 8 samples
 ```
 
-### 4.2 Memory Usage (V1.0.3)
+### 4.2 Memory Usage (V1.1.1)
 
 ```
-RAM:   [===       ]  27.6% (used 90,368 bytes from 327,680 bytes)
-Flash: [=====     ]  53.9% (used 1,059,505 bytes from 1,966,080 bytes)
+RAM:   [===       ]  28.2% (used 92,316 bytes from 327,680 bytes)
+Flash: [======    ]  56.2% (used 1,104,137 bytes from 1,966,080 bytes)
 ```
 
 ## 5. Web Interface Guide
@@ -267,6 +279,8 @@ The system provides a comprehensive web interface accessible at `http://<ESP32_I
 
 **Displays:**
 - Current Date and Time (synchronized via NTP)
+- Current chart with dynamic linear Y-axis scaling for improved low-range visibility
+- Horizontal slider for panning through time windows
 - Real-time sensor readings:
   - Voltage (V)
   - Current (A)
@@ -300,7 +314,7 @@ The system provides a comprehensive web interface accessible at `http://<ESP32_I
 ### 5.3 Information Page (/Information)
 
 **Displays:**
-- Software version (e.g., V1.0.3)
+- Software version (e.g., V1.1.1)
 - Build timestamp
 - ESP32 hardware details
 - RAM usage (bytes and percentage)
@@ -340,7 +354,7 @@ The system provides a comprehensive web interface accessible at `http://<ESP32_I
 
 ## 6. OTA Firmware Updates
 
-For complete OTA instructions, see `OTA_SECURITY_UPDATE.md`
+For complete OTA instructions, see OTA_SECURITY_UPDATE.md
 
 ### 6.1 Quick Reference
 
@@ -352,7 +366,7 @@ For complete OTA instructions, see `OTA_SECURITY_UPDATE.md`
 
 **Build Firmware:**
 ```powershell
-cd "C:\Users\Stephen\Dropbox\Power_Monitor\Power_Monitor"
+cd "C:\Users\Stephen\Documents\Power Monitor\Power_Monitor"
 pio run
 ```
 
@@ -366,8 +380,9 @@ pio run
 2. Enter credentials
 3. Select firmware.bin file
 4. Click Update
-5. Wait for 100% progress
+5. Wait for upload completion and success message
 6. ESP32 automatically reboots
+7. Browser may briefly disconnect during reboot, then reconnect
 
 ## 7. Configuration System
 
@@ -408,7 +423,7 @@ pio run
 |  weather_region    | String  |      "uk"       | Country/region code (ISO 3166)       |
 | weather_enabled    | Boolean |      true       |  Enable/disable weather fetching     |
 | whatsapp_enabled   | Boolean |      true       |  Enable/disable notifications        |
-| gas_meter_enabled  | Boolean |      false      |  Enable/disable gas meter monitoring |
+| gas_meter_enabled  | Boolean |      false      | Legacy config key (runtime gas feature disabled) |
 |   debug_level      | Integer |       2         | 0=none, 1=errors, 2=info, 3=verbose |
 |  main_cycle_ms     | Integer |      5000       | Data sampling interval (milliseconds)|
 | weather_update_ms  | Integer |     600000      | Weather API query (10 minutes)       |
@@ -418,18 +433,13 @@ pio run
 
 ### 7.3 Gas Meter Configuration
 
-The **gas_meter_enabled** parameter controls gas meter pulse monitoring on GPIO 21:
+Gas monitoring is currently disabled in runtime logic.
 
-- **false** (default): Gas switch monitoring disabled
-  - Prevents false triggers from floating input when no gas meter connected
-  - Recommended when gas meter not physically installed
-  
-- **true**: Gas switch monitoring enabled
-  - Monitors pulse output from gas meter (0.1m³ per pulse)
-  - Logs gas volume to CSV data files
-  - Enable only when gas meter is physically connected
+- The **gas_meter_enabled** key is retained for configuration compatibility.
+- CSV structure remains unchanged for historical file compatibility.
+- Runtime gas tracking and active gas monitoring behavior are disabled.
 
-**Note:** With gas meter disabled, the input pin uses internal pull-up resistor but monitoring logic is bypassed to prevent spurious logging.
+**Note:** You can keep this key in config.json; it is currently informational.
 
 ### 7.4 Modifying Configuration
 
@@ -632,4 +642,4 @@ SAMPLING:   5 seconds (config.json: main_cycle_ms)
 CSV FORMAT: 20 fields, ~17,280 records/day
 ```
 
-**End of Technical User Guide V1.0.3**
+**End of Technical User Guide V1.1.1**
