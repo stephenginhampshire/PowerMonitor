@@ -143,10 +143,10 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
-#define VERSION_MINOR 3   // Backwards-compatible functionality additions
-#define VERSION_PATCH 2   // Backwards-compatible bug fixes
-// 14/04/2026  1.3.2 Daily/reboot WhatsApp messages now include web IP and mDNS hostname; unique device hostname advertised for network scanners
-#define VERSION_STRING "V1.3.2"
+#define VERSION_MINOR 1   // Backwards-compatible functionality additions
+#define VERSION_PATCH 1   // Backwards-compatible bug fixes
+// 15/04/2026  1.1.1 Y-axis dynamic linear scaling for improved 2-30A range detail; gas feature fully removed (runtime disabled, UI cleaned, CSV format preserved)
+#define VERSION_STRING "V1.1.1"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -163,11 +163,6 @@ const unsigned long STARTUP_DELAY_MS = 4000;            // Initial startup delay
 const unsigned long DEBOUNCE_INTERVAL_MS = 10;          // Button debounce interval
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 600000; // Weather API call interval (10 minutes)
 const unsigned long WHATSAPP_DUPLICATE_INTERVAL_MS = 300000; // Prevent duplicate messages within 5 minutes
-const double GAS_VOLUME_SAVE_THRESHOLD = 0.1;        // Save to EEPROM every 0.1m³ change
-const int EEPROM_SIZE = 512;                         // EEPROM size in bytes
-const int EEPROM_GAS_VOLUME_ADDR = 0;                // Address for gas volume (8 bytes double)
-const int EEPROM_GAS_MAGIC_ADDR = 8;                 // Address for magic number (4 bytes)
-const uint32_t EEPROM_MAGIC_NUMBER = 0xDEADBEEF;     // Magic number to validate EEPROM data
 const int MAX_WIFI_RETRY_ATTEMPTS = 20;                 // Maximum WiFi connection attempts
 
 // Circular Log Buffer Constants (Issue #24, #26, #27)
@@ -201,7 +196,6 @@ const String CONFIG_FILENAME = "/config.json";       // Configuration file on SD
 #include <Update.h>
 #include <ESPmDNS.h>
 #include <UrlEncode.h>
-#include <EEPROM.h>
 // -----------
 
 // ================================================================================
@@ -406,8 +400,6 @@ constexpr int SCK_pin = 18;
 constexpr int MiSO_pin = 19;
 constexpr int MOSi_pin = 23;
 constexpr int ONBOARDLED = 2;
-constexpr int Gas_Switch_pin = 21;
-constexpr double Gas_Volume_Per_Sensor_Rise = (double).10;
 // Date and Time Fields -----
 struct Date_Time {
     int Second;                 // [0 - 3]
@@ -424,7 +416,6 @@ union Date_Time_Union {
     unsigned char character[Date_Time_Record_Length + 1];
 };
 //Date_Time_Union Today_Date_Time_Data;
-Date_Time_Union Last_Gas_Date_Time_Data;
 Date_Time_Union New_Date_Time_Data;
 Date_Time_Union Current_Date_Time_Data;
 Date_Time_Union Month_End_Date_Time_Data;
@@ -433,9 +424,6 @@ String Current_Date_With = "1951/11/18";
 String Current_Date_Without = "19511118";
 String Current_Time_With = "00:00:00";
 String Current_Time_Without = "000000";
-String Latest_Gas_Date_With = "          ";
-String Latest_Gas_Time_With = "        ";
-double Latest_Gas_Volume = 0;
 String This_Date_With = "1951/11/18";
 String This_Date_Without = "19511116";
 String This_Time_With = "00:00:00";
@@ -464,7 +452,6 @@ struct tm timeinfo;
 Bounce Red_Switch = Bounce();
 Bounce Blue_Switch = Bounce();
 Bounce Yellow_Switch = Bounce();
-Bounce Gas_Switch = Bounce();
 hw_timer_t* Timer0_Cfg = NULL;
 WebServer server(80);               // WebServer(HTTP port, 80 is defAult)
 WiFiClient client;
@@ -600,8 +587,6 @@ double temperature_calibration = (double)16.5 / (double)22.0; // temperature rea
 String Last_Boot_Time_With = "12:12:12";
 String Last_Boot_Date_With = "2022/29/12";
 int This_Day = 0;
-double Cumulative_Gas_Volume = 0;
-double Last_Saved_Gas_Volume = 0;  // Track last saved value to detect threshold changes
 // Lowest Voltage -----------
 double Lowest_Voltage = 0;
 String Time_of_Lowest_Voltage = "00:00:00";
@@ -665,6 +650,10 @@ String Csv_File_Names[31];                          // possibly 31 csv files
 int WiFi_Signal_Strength = 0;
 int WiFi_Retry_Counter = 0;
 unsigned long Last_Time_Update = 0;
+bool ota_reboot_pending = false;
+unsigned long ota_reboot_time = 0;
+String ota_last_error = "";
+bool ota_whatsapp_pending = false;
 // Debug / Test Variables ---
 bool Once = false;
 // --- Firware Update Pages
@@ -733,16 +722,16 @@ const char* serverIndex = {
                 "timeout: 2000,"
                 "success: function(){"
                     "clearInterval(pollInterval);"
-                    "$('#status').html('✓ Device online - Redirecting...');"
+                    "$('#status').html('Device online - Redirecting...');"
                     "setTimeout(function(){ window.location.href='/'; }, 1000);"
                 "},"
                 "error: function(){"
                     "pollAttempts++;"
                     "var elapsed = Math.floor(pollAttempts * 3);"
-                    "$('#status').html('⏳ Waiting for device to reboot... (' + elapsed + 's)');"
+                    "$('#status').html('Waiting for device to reboot... (' + elapsed + 's)');"
                     "if(pollAttempts > 40){"  // 2 minutes max
                         "clearInterval(pollInterval);"
-                        "$('#status').html('⚠ Timeout - Please refresh manually or check device');"
+                        "$('#status').html('Timeout - Please refresh manually or check device');"
                     "}"
                 "}"
             "});"
@@ -769,16 +758,33 @@ const char* serverIndex = {
                     "return xhr;"
                 "},"
                 "success:function(d, s){"
-                    "$('#prg').html('✓ Upload complete!');"
-                    "$('#status').html('Device is rebooting...');"
-                    "setTimeout(function(){"
-                        "pollAttempts = 0;"
-                        "pollInterval = setInterval(pollDevice, 3000);"  // Poll every 3 seconds
-                    "}, 5000);"  // Wait 5 seconds before starting to poll
+                    "var resp = (d || '').toString();"
+                    "if(resp.indexOf('OK') === 0){"
+                        "$('#prg').html('Upload complete!');"
+                        "$('#status').html('Device is rebooting...');"
+                        "setTimeout(function(){"
+                            "pollAttempts = 0;"
+                            "pollInterval = setInterval(pollDevice, 3000);"  // Poll every 3 seconds
+                        "}, 3000);"
+                    "} else {"
+                        "$('#prg').html('Upload failed: ' + resp);"
+                        "$('#status').html('Please try again.');"
+                    "}"
                 "},"
-                "error: function(a, b, c){"
-                    "$('#prg').html('✗ Upload failed: ' + c);"
-                    "$('#status').html('Please try again or check console for errors.');"
+                "error: function(xhr, b, c){"
+                    "if(xhr.status === 0){"
+                        "$('#prg').html('Upload complete - device is rebooting...');"
+                        "$('#status').html('Waiting for device to come back online...');"
+                        "setTimeout(function(){"
+                            "pollAttempts = 0;"
+                            "pollInterval = setInterval(pollDevice, 3000);"
+                        "}, 3000);"
+                    "} else {"
+                        "var body = (xhr.responseText || '').toString();"
+                        "var reason = body.length ? body : (c || ('HTTP ' + xhr.status));"
+                        "$('#prg').html('Upload failed: ' + reason);"
+                        "$('#status').html('HTTP ' + xhr.status + ' ' + (xhr.statusText || ''));"
+                    "}"
                 "}"
             "});"
         "});"
@@ -790,66 +796,6 @@ void IRAM_ATTR resetModule() {
 }
 // setup -----
 //------------
-
-/**
- * @brief Save gas volume to EEPROM for persistence across reboots
- * 
- * Writes the current gas volume reading to EEPROM along with a magic number
- * for validation. This ensures gas meter readings survive power cycles and
- * system reboots. The EEPROM is only written when volume changes by at least
- * 0.1 m³ to minimize wear on EEPROM memory.
- * 
- * @param volume The gas volume in cubic meters to save
- * 
- * @note Side effect: Updates Last_Saved_Gas_Volume global variable
- * @note EEPROM has ~100,000 write cycle limit; writes are throttled to 0.1 m³ changes
- * @see Load_Gas_Volume_From_EEPROM(), GAS_VOLUME_SAVE_THRESHOLD
- */
-void Save_Gas_Volume_To_EEPROM(double volume) {
-    EEPROM.put(EEPROM_GAS_VOLUME_ADDR, volume);
-    EEPROM.put(EEPROM_GAS_MAGIC_ADDR, EEPROM_MAGIC_NUMBER);
-    EEPROM.commit();
-    Last_Saved_Gas_Volume = volume;
-    console_print("Gas volume saved to EEPROM: " + String(volume, 2) + " m³");
-}
-
-/**
- * @brief Load gas volume from EEPROM with validation
- * 
- * Reads the stored gas volume from EEPROM and validates it using a magic number.
- * If the magic number is incorrect (first boot or corrupted data), initializes
- * to 0.0. Performs sanity checks to ensure the value is valid (positive, finite,
- * and less than 100,000 m³).
- * 
- * @return double The gas volume in cubic meters, or 0.0 if EEPROM data is invalid
- * 
- * @note Called once during setup() to restore state after reboot
- * @note Validation checks: magic number match, NaN check, range 0-100000 m³
- * @see Save_Gas_Volume_To_EEPROM(), EEPROM_MAGIC_NUMBER
- */
-double Load_Gas_Volume_From_EEPROM() {
-    uint32_t magic;
-    EEPROM.get(EEPROM_GAS_MAGIC_ADDR, magic);
-    
-    if (magic != EEPROM_MAGIC_NUMBER) {
-        console_print("EEPROM gas volume not initialized (magic mismatch), starting from 0");
-        Save_Gas_Volume_To_EEPROM(0.0);
-        return 0.0;
-    }
-    
-    double volume;
-    EEPROM.get(EEPROM_GAS_VOLUME_ADDR, volume);
-    
-    // Sanity check: volume should be positive and reasonable
-    if (isnan(volume) || volume < 0 || volume > 100000) {
-        console_print("EEPROM gas volume invalid: " + String(volume) + ", resetting to 0");
-        Save_Gas_Volume_To_EEPROM(0.0);
-        return 0.0;
-    }
-    
-    console_print("Gas volume loaded from EEPROM: " + String(volume, 2) + " m³");
-    return volume;
-}
 
 /**
  * @brief Toggle LED state (helper to eliminate code duplication)
@@ -974,10 +920,8 @@ void setup() {
     console_print("\n\nPower Monitor System Starting...");
     console_print(get_version_string());
     
-    // Initialize EEPROM for gas volume persistence
-    EEPROM.begin(EEPROM_SIZE);
-    Current_Data_Record.field.gas_volume = Load_Gas_Volume_From_EEPROM();
-    Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
+    // Gas sensor feature disabled: keep CSV field format but hold runtime value at zero.
+    Current_Data_Record.field.gas_volume = 0;
     
     // Initialize system configuration structures
     g_config.ssid = SSID;
@@ -994,16 +938,12 @@ void setup() {
     pinMode(Blue_Switch_pin, INPUT_PULLUP);
     pinMode(Yellow_Switch_pin, INPUT_PULLUP);
     pinMode(Green_led_pin, OUTPUT);
-    pinMode(Gas_Switch_pin, INPUT_PULLUP);
     console_print("Switch attachment commenced");
-    Gas_Switch.attach(Gas_Switch_pin);
     Red_Switch.attach(Red_Switch_pin); // setup defaults for debouncing switches
     Blue_Switch.attach(Blue_Switch_pin);
     Yellow_Switch.attach(Yellow_Switch_pin);
-    Gas_Switch.interval(100);
     Red_Switch.interval(DEBOUNCE_INTERVAL_MS);              // sets debounce time
     Blue_Switch.interval(DEBOUNCE_INTERVAL_MS);
-    Gas_Switch.update();
     Red_Switch.update();
     Blue_Switch.update();
     console_print("Switch attachment complete");
@@ -1038,6 +978,9 @@ void setup() {
     server.on("/Firmware", HTTP_GET, []() {
         console_print("Firmware Upload Requested via Webpage");
         server.sendHeader("Connection", "close");
+        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "0");
         server.send(200, "text/html", get_loginIndex());
         });
     /**
@@ -1054,6 +997,9 @@ void setup() {
     server.on("/serverIndex", HTTP_GET, []() {
         console_print("Login Succeeded _ Firmware File Selection Requested via Webpage");
         server.sendHeader("Connection", "close");
+        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "0");
         server.send(200, "text/html", serverIndex);
         });
     server.on("/Display", i_Display);               // display the main web page
@@ -1091,20 +1037,30 @@ void setup() {
      */
     server.on("/update", HTTP_POST, []() {
         server.sendHeader("Connection", "close");
-        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-        ESP.restart();
+        if (Update.hasError()) {
+            String failMessage = "FAIL: " + ota_last_error;
+            server.send(200, "text/plain", failMessage);
+        } else {
+            server.send(200, "text/plain", "OK");
+            ota_reboot_pending = true;
+            ota_reboot_time = millis() + 2000;
+        }
         }, []() {
             static size_t totalReceived = 0;
             HTTPUpload& upload = server.upload();
             if (upload.status == UPLOAD_FILE_START) {
                 totalReceived = 0;
+                ota_last_error = "";
+                ota_reboot_pending = false;
                 timerAlarmDisable(Timer0_Cfg);  // Disable watchdog during OTA upload
                 console_print("OTA Update Started: " + upload.filename);
                 console_print("Watchdog timer disabled for OTA upload");
                 console_print("File size: " + String(upload.totalSize) + " bytes");
-                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                size_t beginSize = (upload.totalSize > 0) ? upload.totalSize : UPDATE_SIZE_UNKNOWN;
+                if (!Update.begin(beginSize, U_FLASH)) {
                     Update.printError(Serial);
-                    console_print("OTA Update.begin() failed");
+                    ota_last_error = "Update.begin failed (error " + String(Update.getError()) + ")";
+                    console_print("OTA Update.begin() failed: " + ota_last_error);
                     timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog on failure
                 }
             }
@@ -1112,6 +1068,7 @@ void setup() {
                 totalReceived += upload.currentSize;
                 if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                     Update.printError(Serial);
+                    ota_last_error = "Update.write failed at " + String(totalReceived) + " bytes (error " + String(Update.getError()) + ")";
                     console_print("OTA Write failed at " + String(totalReceived) + " bytes");
                 } else {
                     // Log progress every 100KB
@@ -1123,19 +1080,20 @@ void setup() {
             else if (upload.status == UPLOAD_FILE_END) {
                 console_print("OTA Upload complete: " + String(totalReceived) + " bytes");
                 if (Update.end(true)) {
-                    console_print("OTA Update Success: Rebooting in 2 seconds");
-                    Send_WhatsApp_Message("Power Monitor - Firmware Updated Successfully - Rebooting");
-                    // No need to re-enable watchdog - device will reboot
-                    i_Display();
+                    console_print("OTA Update Success: reboot scheduled");
+                    ota_whatsapp_pending = true;  // Send after HTTP response, not here
+                    timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog until reboot occurs
                 }
                 else {
                     Update.printError(Serial);
-                    console_print("OTA Update.end() failed");
+                    ota_last_error = "Update.end failed (error " + String(Update.getError()) + ")";
+                    console_print("OTA Update.end() failed: " + ota_last_error);
                     timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog on failure
                 }
             }
             else if (upload.status == UPLOAD_FILE_ABORTED) {
                 Update.abort();
+                ota_last_error = "Upload aborted by client";
                 console_print("OTA Upload Aborted at " + String(totalReceived) + " bytes");
                 console_print("Device still running previous firmware - no changes made");
                 timerAlarmEnable(Timer0_Cfg);  // Re-enable watchdog after abort
@@ -1324,10 +1282,17 @@ void loop() {
         digitalWrite(Green_led_pin, HIGH);
         Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time + " | " + Get_Web_Interface_Address());
     }
+    if (ota_reboot_pending && millis() >= ota_reboot_time) {
+        if (ota_whatsapp_pending) {
+            ota_whatsapp_pending = false;
+            Send_WhatsApp_Message("Power Monitor - Firmware Updated Successfully - Rebooting");
+        }
+        console_print("OTA reboot timer elapsed - restarting now");
+        ESP.restart();
+    }
     timerWrite(Timer0_Cfg, 0);                                      // Reset watchdog timer
     Check_WiFi();                                                   // check that the WiFi is still connected
     Check_Blue_Switch(false);
-    Check_Gas_Switch();                                             // check if the gas switch sense pin has risen
     Check_NewDay();                                                 // check if the date has changed
     server.handleClient();                                          // handle any messages from the website
     if (millis() > Last_Cycle + config.main_cycle_ms) {            // configurable main cycle interval
@@ -2145,17 +2110,6 @@ void Write_New_Data_Record_to_Data_Files() {
     Latest_wind_speed = Current_Data_Record.field.wind_speed;
     Latest_wind_direction = Current_Data_Record.field.wind_direction;
     Latest_weather_description = Current_Data_Record.field.weather_description;
-    if (Current_Data_Record.field.gas_volume != Latest_Gas_Volume || Latest_Gas_Volume == 0) {
-        Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
-        if (Latest_Gas_Volume != 0) {
-            Latest_Gas_Date_With = Current_Data_Record.field.ldate;
-            Latest_Gas_Time_With = Current_Data_Record.field.ltime;
-        }
-        else {
-            Latest_Gas_Date_With = "";
-            Latest_Gas_Time_With = "";
-        }
-    }
     smartDelay(100);                                        // Keep LED visible for 100ms (maintains responsiveness)
     toggleLED(Blue_led_pin);                                // Turn LED back off
 }
@@ -2573,12 +2527,6 @@ void Process_Prefill_Field(int field_number, char* field) {
         break;
     case 18: // Gas volume
         Readings_Table[Data_Table_Pointer].field.gas_volume = Parse_CSV_Field_Double(field_number, field);
-        Current_Data_Record.field.gas_volume = Readings_Table[Data_Table_Pointer].field.gas_volume;
-        if (Current_Data_Record.field.gas_volume != 0 && Current_Data_Record.field.gas_volume != Latest_Gas_Volume) {
-            Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
-            Latest_Gas_Date_With = Readings_Table[Data_Table_Pointer].field.ldate;
-            Latest_Gas_Time_With = Readings_Table[Data_Table_Pointer].field.ltime;
-        }
         break;
     case 19: // Weather description
         Parse_CSV_Field_String(field_number, field, Readings_Table[Data_Table_Pointer].field.weather_description, 
@@ -2709,11 +2657,6 @@ void Update_Webpage_Variables_from_Table(int Data_Table_Pointer) {
     Latest_wind_speed = Readings_Table[Data_Table_Pointer].field.wind_speed;
     Latest_wind_direction = Readings_Table[Data_Table_Pointer].field.wind_direction;
     Latest_weather_description = Readings_Table[Data_Table_Pointer].field.weather_description;
-    if (Readings_Table[Data_Table_Pointer].field.gas_volume != 0) {
-        Latest_Gas_Volume = Readings_Table[Data_Table_Pointer].field.gas_volume;
-        Latest_Gas_Date_With = Readings_Table[Data_Table_Pointer].field.ldate;
-        Latest_Gas_Time_With = Readings_Table[Data_Table_Pointer].field.ltime;
-    }
 }
 void Page_Header(bool refresh, String Header) {
     webpage.reserve(6000);
@@ -2842,36 +2785,12 @@ void i_Display() {
             // We have valid data - display the graph
         webpage += F("<script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>");
         webpage += F("<script type=\"text/javascript\">");
-        webpage += F("google.charts.load('current', {packages: ['corechart', 'line']});");
-        webpage += F("google.setOnLoadCallback(drawChart);");
-        webpage += F("function drawChart() {");
-        webpage += F("var data=new google.visualization.DataTable();");
-        webpage += F("data.addColumn('timeofday', 'Time');");
-        webpage += F("data.addColumn('number', 'Amperage');");
-        webpage += F("data.addColumn('number', 'Gas Volume');");
-        webpage += F("data.addRows([");
-        for (int i = 0; i < (Data_Table_Pointer); i++) {
-            if (String(Readings_Table[i].field.ltime) != "") {                     // if the ltime field contains data
-                for (int x = 0; x < 8; x++) {                                    // replace the ":"s in ltime with ","
-                    if (Readings_Table[i].field.ltime[x] == ':') {
-                        Readings_Table[i].field.ltime[x] = ',';
-                    }
-                }
-                webpage += "[[";
-                webpage += String(Readings_Table[i].field.ltime) + "],";
-                webpage += String(Readings_Table[i].field.Amperage, 1) + ",";
-                webpage += String(Readings_Table[i].field.gas_volume, 1) + "]";
-                if (Readings_Table[i].field.Amperage > maximum_Amperage) {
-                    maximum_Amperage = Readings_Table[i].field.Amperage;
-                }
-                if (i != Data_Table_Pointer) {
-                    webpage += ",";
-                }
-            }
-        }
-        webpage += "]);\n";
+        webpage += F("google.charts.load('current', {packages: ['corechart']});");
+        webpage += F("var chart = null;");
+        webpage += F("var all_data = null;");
+        webpage += F("var windowSize = 20;");
         webpage += F("var options = {");
-        webpage += F("title:'Electrical and Gas Consumption logarithmic scale',");
+        webpage += F("title:'Electrical Consumption logarithmic scale',");
         webpage += F("titleTextStyle:{");
         webpage += F("fontName:'Arial',");
         webpage += F("fontSize: 20, ");
@@ -2880,37 +2799,87 @@ void i_Display() {
         webpage += F("legend:{");
         webpage += F("position:'bottom'");
         webpage += F("},");
-        webpage += F("colors: [");
-        webpage += F("'red', 'blue'");
-        webpage += F("],");
+        webpage += F("colors: ['red'],");
         webpage += F("backgroundColor : '#F3F3F3',");
-        webpage += F("chartArea: {");
-        webpage += F("width:'80%',");
-        webpage += F("height: '55%'");
-        webpage += F("}, ");
+        webpage += F("chartArea: {width:'80%',height:'55%'},");
         webpage += F("hAxis:{");
-        webpage += F("slantedText:'true',");
-        webpage += F("slantedTextAngle:'90',");
-        webpage += F("titleTextStyle:{");
-        webpage += F("color:'Purple', ");
-        webpage += F("bold: 'true',");
-        webpage += F("fontSize: '16'");
-        webpage += F("}, ");
-        webpage += F("format: 'HH:mm:ss',");
-        webpage += F("gridlines: {");
-        webpage += F("color:'#333'");
+        webpage += F("slantedText:true,");
+        webpage += F("slantedTextAngle:90,");
+        webpage += F("titleTextStyle:{color:'Purple',bold:true,fontSize:16},");
+        webpage += F("format:'HH:mm:ss',");
+        webpage += F("gridlines:{color:'#333'},");
+        webpage += F("showTextEvery:1");
         webpage += F("},");
-        webpage += F("showTextEvery:'1'");
-        webpage += F("}, ");
-        webpage += F("vAxes:");
-        webpage += F("{0:{viewWindowMode:'explcit',scaleType:'log',title:'Current Amperage',format:'###.###'},");
-        webpage += F(" 1:{scaleType:'log',title:'Daily Cumulative Gas Volume cu.litre',format:'###.###'},},");
-        webpage += F("series:{0:{targetAxisindex:0},1:{targetAxisindex:1},curveType:'none'},};");
-        webpage += F("var chart = new google.visualization.LineChart(document.getElementById('line_chart'));");
-        webpage += F("chart.draw(data, options); ");
+        webpage += F("vAxis:{title:'Current Amperage (Amps)',format:'###.###'},");
+        webpage += F("curveType:'none',");
+        webpage += F("focusTarget:'category'");
+        webpage += F("};");
+        webpage += F("google.setOnLoadCallback(drawChart);");
+        webpage += F("function drawChart() {");
+        webpage += F("var data=new google.visualization.DataTable();");
+        webpage += F("data.addColumn('datetime', 'Time');");
+        webpage += F("data.addColumn('number', 'Amperage');");
+        webpage += F("data.addRows([");
+        for (int i = 0; i < (Data_Table_Pointer); i++) {
+            if (String(Readings_Table[i].field.ltime) != "") {                     // if the ltime field contains data
+                for (int x = 0; x < 8; x++) {                                    // replace the ":"s in ltime with ","
+                    if (Readings_Table[i].field.ltime[x] == ':') {
+                        Readings_Table[i].field.ltime[x] = ',';
+                    }
+                }
+                webpage += "[new Date(2000,0,1,";
+                webpage += String(Readings_Table[i].field.ltime) + "),";
+                webpage += String(Readings_Table[i].field.Amperage, 1) + "]";
+                if (Readings_Table[i].field.Amperage > maximum_Amperage) {
+                    maximum_Amperage = Readings_Table[i].field.Amperage;
+                }
+                if (i != Data_Table_Pointer) {
+                    webpage += ",";
+                }
+            }
+        }
+        webpage += F("]);");
+        webpage += F("all_data = data;");
+        webpage += F("windowSize = Math.max(20, Math.ceil(data.getNumberOfRows() / 3));");
+        webpage += F("chart = new google.visualization.LineChart(document.getElementById('line_chart'));");
+        webpage += F("updateChart(0);");
         webpage += F("}");
+        webpage += F("function updateChart(startIndex) {");
+        webpage += F("if(!all_data || all_data.getNumberOfRows() === 0) return;");
+        webpage += F("var maxStart = Math.max(0, all_data.getNumberOfRows() - windowSize);");
+        webpage += F("startIndex = Math.min(startIndex, maxStart);");
+        webpage += F("var endIndex = Math.min(startIndex + windowSize, all_data.getNumberOfRows());");
+        webpage += F("var windowData = all_data.clone();");
+        webpage += F("if(endIndex < all_data.getNumberOfRows()) {");
+        webpage += F("windowData.removeRows(endIndex, all_data.getNumberOfRows() - endIndex);");
+        webpage += F("}");
+        webpage += F("if(startIndex > 0) {");
+        webpage += F("windowData.removeRows(0, startIndex);");
+        webpage += F("}");
+        webpage += F("if(windowData.getNumberOfRows() > 0) {");
+        webpage += F("var firstTime = windowData.getValue(0, 0);");
+        webpage += F("var lastTime = windowData.getValue(windowData.getNumberOfRows()-1, 0);");
+        webpage += F("document.getElementById('slider_time').innerText = firstTime.toLocaleTimeString() + ' to ' + lastTime.toLocaleTimeString();");
+        webpage += F("}");
+        webpage += F("chart.draw(windowData, options);");
+        webpage += F("}");
+        webpage += F("document.addEventListener('DOMContentLoaded', function() {");
+        webpage += F("var slider = document.getElementById('time_slider');");
+        webpage += F("if(slider) {");
+        webpage += F("slider.addEventListener('input', function() {");
+        webpage += F("updateChart(parseInt(this.value));");
+        webpage += F("});");
+        webpage += F("}");
+        webpage += F("});");
         webpage += F("</script>");
-        webpage += F("<div id='line_chart' style='width:960px; height:600px'></div>");
+        webpage += F("<p style='color:#555; font-size:14px; margin-bottom:8px;'>Drag the slider left to see older data, right to see newer data.</p>");
+        webpage += F("<div style='width:960px; margin-top:12px;'>");
+        webpage += F("<input type='range' id='time_slider' min='0' max='");
+        webpage += String(Data_Table_Pointer > 20 ? Data_Table_Pointer - 20 : 0);
+        webpage += F("' value='0' style='width:100%; height:6px; border-radius:3px; background:#DDD; outline:none; -webkit-appearance:slider-horizontal; cursor:pointer;'>");
+        webpage += F("<div id='slider_time' style='text-align:center; color:#666; font-size:12px; margin-top:4px;'>--:--:-- to --:--:--</div>");
+        webpage += F("</div>");
+        webpage += F("<div id='line_chart' style='width:960px; height:600px; margin-top:8px;'></div>");
         }  // End of valid data check
     }  // End of Data_Table_Pointer > 0 check
     
@@ -2949,7 +2918,6 @@ void i_Config_Upload() {
     webpage += String(F("<tr><td><strong>Weather Location:</strong></td><td>")) + config.weather_city + String(F(", ")) + config.weather_region + String(F("</td></tr>"));
     webpage += String(F("<tr><td><strong>Weather Enabled:</strong></td><td>")) + String(config.weather_enabled ? "Yes" : "No") + String(F("</td></tr>"));
     webpage += String(F("<tr><td><strong>WhatsApp Enabled:</strong></td><td>")) + String(config.whatsapp_enabled ? "Yes" : "No") + String(F("</td></tr>"));
-    webpage += String(F("<tr><td><strong>Gas Meter Enabled:</strong></td><td>")) + String(config.gas_meter_enabled ? "Yes" : "No") + String(F("</td></tr>"));
     webpage += F("</table><br>");
     
     webpage += F("<h3>Download Current Configuration</h3>");
@@ -3220,23 +3188,7 @@ void i_Information() {                                                    // Dis
     webpage += F("'>Weather: ");
     webpage += String(Latest_weather_description);
     webpage += "</span></strong></p>";
-    // Row 16.Last Gas Sensor Reading ----------
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:14px; '");
-    webpage += F(">Date and Time of Last Gas Switch Signal: ");
-    webpage += String(Latest_Gas_Date_With) + " at " + Latest_Gas_Time_With;
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Row 17.Latest Gas Volume -
-    webpage += F("<p ");
-    webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
-    webpage += F("bold:true; font-size:14px; '");
-    webpage += F(">Cumulative Gas Volume: ");
-    webpage += String(Current_Data_Record.field.gas_volume) + " cubic metres";
-    webpage += "</span></strong></p>";
-    webpage += F("<p ");
-    // Row 18.Month End Process Status
+    // Row 16.Month End Process Status
     webpage += F("<p ");
     webpage += F("style='line-height:75%;text-align:left;'><strong><span style='color:DodgerBlue;");
     webpage += F("bold:true; font-size:14px; '");
@@ -3716,29 +3668,6 @@ void Check_Blue_Switch(bool Month_End_Auto) {
         Update_Current_Timeinfo();                                                  // reset the date
     }
 }
-void Check_Gas_Switch() {
-    if (!config.gas_meter_enabled) {
-        return;  // Gas meter monitoring disabled - skip to prevent false triggers from floating input
-    }
-    
-    Gas_Switch.update();                                                                // read the gas switch
-    if (Gas_Switch.fell()) {
-        console_print("Gas Switch Fell");
-        Current_Data_Record.field.gas_volume += Gas_Volume_Per_Sensor_Rise; // +gas when gas switch on rising edge
-        Latest_Gas_Volume = Current_Data_Record.field.gas_volume;
-        Latest_Gas_Date_With = Current_Date_With;
-        Latest_Gas_Time_With = Current_Time_With;
-        toggleLED(Green_led_pin); // flash the green light if Gas Switch changed
-        
-        // Save to EEPROM if changed by threshold amount (0.1m³)
-        if (abs(Current_Data_Record.field.gas_volume - Last_Saved_Gas_Volume) >= GAS_VOLUME_SAVE_THRESHOLD) {
-            Save_Gas_Volume_To_EEPROM(Current_Data_Record.field.gas_volume);
-        }
-    }
-    if (Gas_Switch.rose()) {
-        console_print("Gas Switch Rose");
-    }
-}
 void Check_Red_Switch(String message) {
     // This function is deprecated but kept for compatibility
     // Now automatically reboots after error notification
@@ -4024,3 +3953,4 @@ void Parse(String payload, int start, int end) {
     }
     Parse_Output[ptr] = '\0';
 }
+
