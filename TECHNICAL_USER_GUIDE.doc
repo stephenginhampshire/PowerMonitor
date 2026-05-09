@@ -1,0 +1,547 @@
+﻿<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Power Monitor Technical User Guide</title>
+<style>
+body { font-family: Calibri; font-size: 11pt; line-height: 1.15; }
+p { margin: 0; padding: 0; }
+h1 { margin: 12pt 0 6pt 0; font-size: 16pt; }
+h2 { margin: 10pt 0 4pt 0; font-size: 14pt; }
+h3 { margin: 8pt 0 4pt 0; font-size: 12pt; }
+ul { margin: 4pt 0; padding-left: 20pt; }
+li { margin: 0; }
+table { margin: 8pt 0; }
+</style>
+</head>
+<body><h1 style='mso-style-name:"Heading 1"'>Power Monitor Technical User Guide</h1>
+<h2 style='mso-style-name:"Heading 2"'>Version 1.1.1</h2>
+<h2 style='mso-style-name:"Heading 2"'>Changelog</h2>
+<h3 style='mso-style-name:"Heading 3"'>Version 1.1.1 (April 15, 2026)</h3>
+<li>**Web Chart Improvements**:</li>
+<p>  - Dynamic linear Y-axis scaling for improved detail in the normal 2-4A range</p>
+<p>  - Horizontal slider retained for panning older/newer data windows</p>
+<li>**Feature Cleanup**:</li>
+<p>  - Gas monitoring disabled in runtime logic</p>
+<p>  - CSV file format preserved for backward compatibility</p>
+<li>**OTA Reliability**:</li>
+<p>  - Upload response completes before reboot to reduce false failure reports</p>
+<p>  - Browser reconnect flow handles reboot window more reliably</p>
+<h3 style='mso-style-name:"Heading 3"'>Version 1.0.5 (January 5, 2026)</h3>
+<li>**RS485 Communication Improvements**:</li>
+<p>  - Separated DE (Driver Enable, pin 22) and RE (Receiver Enable, pin 25) control lines</p>
+<p>  - Both pins configured as Active HIGH</p>
+<p>  - Implemented 3-attempt retry logic with adaptive delays (75ms, 100ms, 125ms)</p>
+<p>  - Added per-field error tracking and statistics reporting</p>
+<p>  - Increased inter-request delay from 50ms to 75ms for improved reliability</p>
+<li>**System Enhancements**:</li>
+<p>  - Watchdog timer fully operational with proper refresh in all functions</p>
+<p>  - Blue LED (pin 4) now flashes on SD card write operations (100ms visible pulse)</p>
+<p>  - WhatsApp reboot notifications active</p>
+<li>**Web Interface**:</li>
+<p>  - Fixed menu wrapping issue - all items now fit on single line</p>
+<p>  - Reduced menu padding from 25px to 15px</p>
+<p>  - Fixed HTML typo in ZipAllFiles menu link</p>
+<h2 style='mso-style-name:"Heading 2"'>1. System Overview</h2>
+<h3 style='mso-style-name:"Heading 3"'>1.1 Purpose</h3>
+<p>The Power Monitor is a comprehensive energy monitoring system that:</p>
+<li>Monitors single-phase or three-phase AC power consumption</li>
+<li>Logs voltage, current, power, energy (kWh), and temperature data</li>
+<li>Stores data to SD card in CSV format (daily and monthly files)</li>
+<li>Provides real-time web interface for monitoring and control</li>
+<li>Sends WhatsApp notifications for critical events</li>
+<li>Integrates weather data for environmental correlation</li>
+<li>Supports over-the-air (OTA) firmware updates</li>
+<h3 style='mso-style-name:"Heading 3"'>1.2 Key Features</h3>
+<li>**Real-time Monitoring**: 5-second polling interval (configurable)</li>
+<li>**Data Logging**: CSV files with 20 data fields per record</li>
+<li>**Web Interface**: Full-featured HTTP server with multiple pages</li>
+<li>**Chart Navigation**: Dynamic linear Y-axis scaling and horizontal time-window slider</li>
+<li>**Remote Notifications**: WhatsApp integration via CallMeBot API</li>
+<li>**Weather Correlation**: OpenWeatherMap API integration</li>
+<li>**File Management**: Download, delete, and consolidate data files</li>
+<li>**OTA Updates**: Wireless firmware updates via web interface</li>
+<li>**Automatic Recovery**: Self-healing WiFi and SD card error handling</li>
+<h3 style='mso-style-name:"Heading 3"'>1.3 System Specifications</h3>
+<li>**Microcontroller**: ESP32-WROOM-DA (240MHz, 320KB RAM, 4MB Flash)</li>
+<li>**Power Meter**: KWS-AC301L-100A (RS485/MODBUS interface)</li>
+<li>**Communication**: </li>
+<p>  - RS485 at 9600 baud (to power meter)</p>
+<p>  - WiFi 802.11 b/g/n (to network)</p>
+<p>  - Serial console at 115200 baud (debugging)</p>
+<li>**Storage**: MicroSD card (FAT32, recommended 4GB+)</li>
+<li>**Power**: 5V via USB or external supply</li>
+<h2 style='mso-style-name:"Heading 2"'>2. Theory of Operation</h2>
+<h3 style='mso-style-name:"Heading 3"'>2.1 Main Program Flow</h3>
+<p><b>POWER-ON RESET â†’ setup() Function:</b></p>
+<li>Initialize serial console (115200 baud)</li>
+<li>Configure GPIO pins (LEDs, switches, RS485 enable)</li>
+<li>Connect to WiFi (retry with automatic recovery)</li>
+<li>Start web server (routes: /, /Firmware, /Display, etc.)</li>
+<li>Initialize RS485 port (9600 baud)</li>
+<li>Initialize SD card (retry up to 3 times)</li>
+<li>Load config.json from SD card</li>
+<li>Synchronize time via NTP</li>
+<li>Load weather data (if enabled)</li>
+<li>Open or create daily CSV data file</li>
+<li>Send WhatsApp boot notification</li>
+<p><b>loop() Function (continuous):</b></p>
+<li>Check timing intervals (main_cycle_ms = 5000ms)</li>
+<li>Call main_programme() every 5 seconds</li>
+<li>Handle web server requests</li>
+<li>Monitor WiFi connection status</li>
+<li>Update health check timer</li>
+<p><b>main_programme() Function (every 5 seconds):</b></p>
+<p>1. Check for day rollover (create new CSV file)</p>
+<p>2. Check for month rollover (trigger month-end process)</p>
+<p>3. Send 8 RS485 requests to KWS meter:</p>
+<p>   - Voltage (0x0E)</p>
+<p>   - Current (0x0F)</p>
+<p>   - Watts (0x11)</p>
+<p>   - Uptime (0x19)</p>
+<p>   - kWh (0x17)</p>
+<p>   - Power Factor (0x1D)</p>
+<p>   - Frequency (0x1E)</p>
+<p>   - Temperature (0x1A)</p>
+<p>4. Parse and store responses in Readings_Table</p>
+<p>5. Update min/max values (lowest voltage, highest current)</p>
+<p>6. Append data record to daily CSV file</p>
+<p>7. Verify write operation</p>
+<p>8. Update weather data (if interval elapsed)</p>
+<p>9. Monitor SD card space (warn if <10% free)</p>
+<p>10. Loop back to loop() function</p>
+<h3 style='mso-style-name:"Heading 3"'>2.2 Data Acquisition Cycle</h3>
+<p>Every 5 seconds (configurable via <code>config.main_cycle_ms</code>):</p>
+<p>1. <b>RS485 Transaction</b> (per request, with retry logic):</p>
+<p>   - Enable RS485 transmitter (GPIO 22 DE=HIGH, GPIO 25 RE=HIGH)</p>
+<p>   - Send 8-byte request packet (2ms delay between bytes)</p>
+<p>   - Disable transmitter (GPIO 22 DE=LOW)</p>
+<p>   - Enable receiver (GPIO 25 RE=HIGH for RX)</p>
+<p>   - Wait for response (timeout: 500ms)</p>
+<p>   - Parse response packet</p>
+<p>   - Extract data value</p>
+<p>   - Apply scaling factor</p>
+<p>   - <b>Retry Logic</b>: Up to 3 attempts per request with adaptive delays (75-125ms)</p>
+<p>   - <b>Error Tracking</b>: Per-field failure statistics reported every 10 failures</p>
+<p>2. <b>Data Processing</b>:</p>
+<p>   - Store in <code>Readings_Table[8]</code> structure array</p>
+<p>   - Calculate derived values (averages, trends)</p>
+<p>   - Update min/max tracking variables</p>
+<p>   - Format values for CSV output</p>
+<p>3. <b>Storage</b>:</p>
+<p>   - Flash blue LED (SD activity indicator)</p>
+<p>   - Open daily CSV file in append mode</p>
+<p>   - Write comma-separated record (20 fields)</p>
+<p>   - Verify write operation</p>
+<p>   - Close file</p>
+<p>   - Update file size tracking</p>
+<h3 style='mso-style-name:"Heading 3"'>2.3 Timing and Intervals</h3>
+<table border='1' style='border-collapse:collapse'>
+<tr><th style='background:#DDD;padding:4px'>Task</th><th style='background:#DDD;padding:4px'>Default Interval</th><th style='background:#DDD;padding:4px'>Configurable</th><th style='background:#DDD;padding:4px'>Purpose</th></tr>
+<tr><td style='padding:4px'>Main cycle</td><td style='padding:4px'>5000ms (5 sec)</td><td style='padding:4px'>Yes</td><td style='padding:4px'>Data sampling rate</td></tr>
+<tr><td style='padding:4px'>Weather update</td><td style='padding:4px'>600000ms (10 min)</td><td style='padding:4px'>Yes</td><td style='padding:4px'>API query frequency</td></tr>
+<tr><td style='padding:4px'>Health check</td><td style='padding:4px'>60000ms (1 min)</td><td style='padding:4px'>Yes</td><td style='padding:4px'>System diagnostics</td></tr>
+<tr><td style='padding:4px'>WiFi retry</td><td style='padding:4px'>30000ms (30 sec)</td><td style='padding:4px'>No</td><td style='padding:4px'>Connection recovery</td></tr>
+<tr><td style='padding:4px'>SD retry delay</td><td style='padding:4px'>1000ms (1 sec)</td><td style='padding:4px'>No</td><td style='padding:4px'>File operation retry</td></tr>
+<tr><td style='padding:4px'>WhatsApp debounce</td><td style='padding:4px'>1000ms (1 sec)</td><td style='padding:4px'>No</td><td style='padding:4px'>Message rate limit</td></tr>
+<tr><td style='padding:4px'>WhatsApp dup block</td><td style='padding:4px'>300000ms (5 min)</td><td style='padding:4px'>No</td><td style='padding:4px'>Prevent spam</td></tr>
+</table>
+<h2 style='mso-style-name:"Heading 2"'>3. Hardware Architecture</h2>
+<h3 style='mso-style-name:"Heading 3"'>3.1 ESP32 Pin Assignments</h3>
+<table border='1' style='border-collapse:collapse'>
+<tr><th style='background:#DDD;padding:4px'>GPIO Pin</th><th style='background:#DDD;padding:4px'>Function</th><th style='background:#DDD;padding:4px'>Direction</th><th style='background:#DDD;padding:4px'>Description</th></tr>
+<tr><td style='padding:4px'>2</td><td style='padding:4px'>Onboard LED</td><td style='padding:4px'>Output</td><td style='padding:4px'>ESP32 module status LED</td></tr>
+<tr><td style='padding:4px'>4</td><td style='padding:4px'>Blue LED</td><td style='padding:4px'>Output</td><td style='padding:4px'>SD card activity indicator</td></tr>
+<tr><td style='padding:4px'>5</td><td style='padding:4px'>SS (CS)</td><td style='padding:4px'>Output</td><td style='padding:4px'>SD card SPI chip select</td></tr>
+<tr><td style='padding:4px'>16</td><td style='padding:4px'>RS485 RX</td><td style='padding:4px'>Input</td><td style='padding:4px'>RS485 receive from KWS meter</td></tr>
+<tr><td style='padding:4px'>17</td><td style='padding:4px'>RS485 TX</td><td style='padding:4px'>Output</td><td style='padding:4px'>RS485 transmit to KWS meter</td></tr>
+<tr><td style='padding:4px'>18</td><td style='padding:4px'>SCK</td><td style='padding:4px'>Output</td><td style='padding:4px'>SD card SPI clock</td></tr>
+<tr><td style='padding:4px'>19</td><td style='padding:4px'>MISO</td><td style='padding:4px'>Input</td><td style='padding:4px'>SD card SPI data in</td></tr>
+<tr><td style='padding:4px'>21</td><td style='padding:4px'>Reserved</td><td style='padding:4px'>Input</td><td style='padding:4px'>Reserved (gas feature disabled)</td></tr>
+<tr><td style='padding:4px'>22</td><td style='padding:4px'>RS485 DE</td><td style='padding:4px'>Output</td><td style='padding:4px'>RS485 Driver Enable (TX ctrl)</td></tr>
+<tr><td style='padding:4px'>23</td><td style='padding:4px'>MOSI</td><td style='padding:4px'>Output</td><td style='padding:4px'>SD card SPI data out</td></tr>
+<tr><td style='padding:4px'>25</td><td style='padding:4px'>RS485 RE</td><td style='padding:4px'>Output</td><td style='padding:4px'>RS485 Receiver Enable (RX ctrl)</td></tr>
+<tr><td style='padding:4px'>26</td><td style='padding:4px'>Green LED</td><td style='padding:4px'>Output</td><td style='padding:4px'>Status indicator</td></tr>
+<tr><td style='padding:4px'>27</td><td style='padding:4px'>Yellow Switch</td><td style='padding:4px'>Input</td><td style='padding:4px'>User input button</td></tr>
+<tr><td style='padding:4px'>32</td><td style='padding:4px'>Blue Switch</td><td style='padding:4px'>Input</td><td style='padding:4px'>User input button</td></tr>
+<tr><td style='padding:4px'>33</td><td style='padding:4px'>Red Switch</td><td style='padding:4px'>Input</td><td style='padding:4px'>User input button</td></tr>
+</table>
+<h3 style='mso-style-name:"Heading 3"'>3.2 Hardware Connections</h3>
+<h4 style='mso-style-name:"Heading 4"'>KWS-AC301L-100A Power Meter</h4>
+<li>**Interface**: RS485 (differential signaling, A/B twisted pair)</li>
+<li>**Protocol**: MODBUS RTU variant</li>
+<li>**Baud Rate**: 9600 bps, 8N1 (8 data bits, no parity, 1 stop bit)</li>
+<li>**Slave Address**: 0x02</li>
+<li>**Wiring**:</li>
+<p>  - ESP32 GPIO 17 (TX) â†’ RS485 transceiver DI</p>
+<p>  - ESP32 GPIO 16 (RX) â†’ RS485 transceiver RO</p>
+<p>  - ESP32 GPIO 22 (DE) â†’ RS485 transceiver DE (Driver Enable - Active HIGH)</p>
+<p>  - ESP32 GPIO 25 (RE) â†’ RS485 transceiver RE (Receiver Enable - Active HIGH)</p>
+<p>  - RS485 A â†’ KWS meter A terminal</p>
+<p>  - RS485 B â†’ KWS meter B terminal</p>
+<li>**Note**: DE and RE are separate pins (both Active HIGH). During TX: both HIGH. During RX: DE=LOW, RE=HIGH.</li>
+<h4 style='mso-style-name:"Heading 4"'>SD Card Module</h4>
+<li>**Interface**: SPI (Serial Peripheral Interface)</li>
+<li>**Format**: FAT32</li>
+<li>**Recommended Size**: 4GB or larger</li>
+<li>**Wiring**:</li>
+<p>  - GPIO 5 (SS)  SD card CS</p>
+<p>  - GPIO 18 (SCK)  SD card CLK  </p>
+<p>  - GPIO 19 (MISO)  SD card DO</p>
+<p>  - GPIO 23 (MOSI)  SD card DI</p>
+<p>  - 3.3V  SD card VCC</p>
+<p>  - GND  SD card GND</p>
+<h2 style='mso-style-name:"Heading 2"'>4. Software Architecture</h2>
+<h3 style='mso-style-name:"Heading 3"'>4.1 Data Structures</h3>
+<h4 style='mso-style-name:"Heading 4"'>RuntimeConfig Structure</h4>
+<p>Location: Lines 329-345 in Power_Monitor.ino</p>
+<p><code>`</code>cpp</p>
+<p>struct RuntimeConfig {</p>
+<p>    String wifi_ssid;              // WiFi network name</p>
+<p>    String wifi_password;          // WiFi password</p>
+<p>    String ntp_server;             // Time server (e.g., pool.ntp.org)</p>
+<p>    String weather_city;           // City for weather data</p>
+<p>    String weather_region;         // Region code (e.g., "uk")</p>
+<p>    bool weather_enabled;          // Enable/disable weather fetching</p>
+<p>    bool whatsapp_enabled;         // Enable/disable WhatsApp notifications</p>
+<p>    int debug_level;               // 0=none, 1=errors, 2=info, 3=verbose</p>
+<p>    unsigned long main_cycle_ms;   // Data sampling interval (default: 5000)</p>
+<p>    unsigned long weather_update_ms; // Weather update interval (default: 600000)</p>
+<p>    unsigned long health_check_ms; // Health check interval (default: 60000)</p>
+<p>    String ota_username;           // OTA login username (default: "SteveG")</p>
+<p>    String ota_password;           // OTA login password (default: "W00dle1gh")</p>
+<p>};</p>
+<p><code>`</code></p>
+<h4 style='mso-style-name:"Heading 4"'>Readings_Table Structure</h4>
+<p>Stores sensor data from KWS meter:</p>
+<p><code>`</code>cpp</p>
+<p>struct Readings_Table_struct {</p>
+<p>    double voltage;                // Volts (V)</p>
+<p>    double amperage;               // Amps (A)</p>
+<p>    double wattage;                // Watts (W)</p>
+<p>    double uptime;                 // Operating minutes</p>
+<p>    double kilowatthour;           // Energy consumption (kWh)</p>
+<p>    double power_factor;           // 0.00 - 1.00</p>
+<p>    double frequency;              // Hertz (Hz)</p>
+<p>    double temperature;            // Celsius (C)</p>
+<p>};</p>
+<p>Readings_Table_struct Readings_Table[8];  // Ring buffer for 8 samples</p>
+<p><code>`</code></p>
+<h3 style='mso-style-name:"Heading 3"'>4.2 Memory Usage (V1.1.1)</h3>
+<p><code>`</code></p>
+<p>RAM:   [===       ]  28.2% (used 92,316 bytes from 327,680 bytes)</p>
+<p>Flash: [======    ]  56.2% (used 1,104,137 bytes from 1,966,080 bytes)</p>
+<p><code>`</code></p>
+<h2 style='mso-style-name:"Heading 2"'>5. Web Interface Guide</h2>
+<p>The system provides a comprehensive web interface accessible at <code>http://<ESP32_IP>/</code></p>
+<h3 style='mso-style-name:"Heading 3"'>5.1 Available Routes</h3>
+<table border='1' style='border-collapse:collapse'>
+<tr><th style='background:#DDD;padding:4px'>Route</th><th style='background:#DDD;padding:4px'>Method</th><th style='background:#DDD;padding:4px'>Description</th><th style='background:#DDD;padding:4px'>Authentication</th></tr>
+<tr><td style='padding:4px'>`/`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Main dashboard (redirects to /Display)</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/Display`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Real-time monitoring with current readings</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/Information`</td><td style='padding:4px'>GET</td><td style='padding:4px'>System info (version, uptime, memory, WiFi)</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/DownloadFiles`</td><td style='padding:4px'>GET</td><td style='padding:4px'>File download interface - list and select</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/GetFile`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Download selected file (CSV or ZIP)</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/DeleteFiles`</td><td style='padding:4px'>GET</td><td style='padding:4px'>File deletion interface - list and select</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/DelFile`</td><td style='padding:4px'>POST</td><td style='padding:4px'>Delete selected file</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/DeletePreviousMonth`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Bulk delete previous month's daily files</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/ConfirmDeletePrevMonth`</td><td style='padding:4px'>POST</td><td style='padding:4px'>Confirm bulk deletion</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/Reset`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Remotely reboot the ESP32</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/WhatsApp`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Send test WhatsApp message</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/ConfigUpload`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Configuration file upload interface</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/DownloadConfig`</td><td style='padding:4px'>GET</td><td style='padding:4px'>Download current config.json to PC</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/UploadConfig`</td><td style='padding:4px'>POST</td><td style='padding:4px'>Upload new config.json from PC and reboot</td><td style='padding:4px'>No</td></tr>
+<tr><td style='padding:4px'>`/Firmware`</td><td style='padding:4px'>GET</td><td style='padding:4px'>OTA login page</td><td style='padding:4px'>**Yes - OTA creds**</td></tr>
+<tr><td style='padding:4px'>`/serverIndex`</td><td style='padding:4px'>GET</td><td style='padding:4px'>OTA file upload page</td><td style='padding:4px'>**Yes - Post-login**</td></tr>
+<tr><td style='padding:4px'>`/update`</td><td style='padding:4px'>POST</td><td style='padding:4px'>OTA firmware upload handler</td><td style='padding:4px'>**Yes - Post-login**</td></tr>
+</table>
+<h3 style='mso-style-name:"Heading 3"'>5.2 Main Dashboard (/Display)</h3>
+<p><b>Displays:</b></p>
+<li>Current Date and Time (synchronized via NTP)</li>
+<li>Current chart with dynamic linear Y-axis scaling for improved low-range visibility</li>
+<li>Horizontal slider for panning through time windows</li>
+<li>Real-time sensor readings:</li>
+<p>  - Voltage (V)</p>
+<p>  - Current (A)</p>
+<p>  - Power (W)</p>
+<p>  - Energy (kWh)</p>
+<p>  - Power Factor</p>
+<p>  - Frequency (Hz)</p>
+<p>  - Temperature (C)</p>
+<li>Min/Max statistics:</li>
+<p>  - Lowest/Highest Voltage with timestamps</p>
+<p>  - Highest Current with timestamp</p>
+<li>Weather information (if enabled):</li>
+<p>  - Temperature (current, feels like, min, max)</p>
+<p>  - Atmospheric pressure</p>
+<p>  - Humidity</p>
+<p>  - Wind speed and direction</p>
+<li>System status:</li>
+<p>  - WiFi signal strength</p>
+<p>  - SD card usage</p>
+<p>  - Uptime</p>
+<p><b>Buttons:</b></p>
+<li>Information - View system details</li>
+<li>Download Files - Access data files</li>
+<li>Delete Files - Manage storage</li>
+<li>Delete Previous Month - Bulk cleanup</li>
+<li>Send WhatsApp - Test notifications</li>
+<li>Reset - Reboot system</li>
+<li>Firmware Update - OTA upload</li>
+<h3 style='mso-style-name:"Heading 3"'>5.3 Information Page (/Information)</h3>
+<p><b>Displays:</b></p>
+<li>Software version (e.g., V1.1.1)</li>
+<li>Build timestamp</li>
+<li>ESP32 hardware details</li>
+<li>RAM usage (bytes and percentage)</li>
+<li>Flash usage (bytes and percentage)</li>
+<li>WiFi SSID and signal strength (RSSI)</li>
+<li>IP address</li>
+<li>MAC address</li>
+<li>SD card status and space</li>
+<li>Configuration settings</li>
+<li>Last boot time</li>
+<h3 style='mso-style-name:"Heading 3"'>5.4 File Management Pages</h3>
+<h4 style='mso-style-name:"Heading 4"'>Download Files (/DownloadFiles)</h4>
+<li>Lists all CSV and ZIP files on SD card</li>
+<li>Shows file sizes</li>
+<li>Click filename to download</li>
+<li>Supports daily files (DF_YYYYMMDD.csv) and monthly files (MF_MM.zip)</li>
+<h4 style='mso-style-name:"Heading 4"'>Delete Files (/DeleteFiles)</h4>
+<li>Lists all files with checkboxes</li>
+<li>Select multiple files for deletion</li>
+<li>Confirmation required before delete</li>
+<li>Shows freed space after deletion</li>
+<h3 style='mso-style-name:"Heading 3"'>5.5 Remote Control Pages</h3>
+<h4 style='mso-style-name:"Heading 4"'>Reset (/Reset)</h4>
+<li>Sends WhatsApp notification: "Resetting Processor from Webpage at HH:MM:SS"</li>
+<li>Performs ESP.restart() after 2 seconds</li>
+<li>System reboots and resumes normal operation</li>
+<h4 style='mso-style-name:"Heading 4"'>WhatsApp Test (/WhatsApp)</h4>
+<li>Sends test message: "Sending Test Message from Webpage at HH:MM:SS"</li>
+<li>Confirms WhatsApp API connectivity</li>
+<li>Useful for troubleshooting notifications</li>
+<h2 style='mso-style-name:"Heading 2"'>6. OTA Firmware Updates</h2>
+<p>For complete OTA instructions, see OTA_SECURITY_UPDATE.md</p>
+<h3 style='mso-style-name:"Heading 3"'>6.1 Quick Reference</h3>
+<p><b>Access:</b> <code>http://<ESP32_IP>/Firmware</code></p>
+<p><b>Default Credentials:</b></p>
+<li>Username: `SteveG`</li>
+<li>Password: `W00dle1gh`</li>
+<p><b>Build Firmware:</b></p>
+<p><code>`</code>powershell</p>
+<p>cd "C:\Users\Stephen\Documents\Power Monitor\Power_Monitor"</p>
+<p>pio run</p>
+<p><code>`</code></p>
+<p><b>Firmware Location:</b></p>
+<p><code>`</code></p>
+<p>.pio\build\esp32da\firmware.bin</p>
+<p><code>`</code></p>
+<p><b>Upload Process:</b></p>
+<p>1. Navigate to /Firmware</p>
+<p>2. Enter credentials</p>
+<p>3. Select firmware.bin file</p>
+<p>4. Click Update</p>
+<p>5. Wait for upload completion and success message</p>
+<p>6. ESP32 automatically reboots</p>
+<p>7. Browser may briefly disconnect during reboot, then reconnect</p>
+<h2 style='mso-style-name:"Heading 2"'>7. Configuration System</h2>
+<h3 style='mso-style-name:"Heading 3"'>7.1 config.json File</h3>
+<p><b>Location:</b> <code>/config.json</code> (SD card root directory)</p>
+<p><b>Format:</b> JSON (human-readable, editable with any text editor)</p>
+<p><b>Sample Configuration:</b></p>
+<p><code>`</code>json</p>
+<p>{</p>
+<p>  "wifi_ssid": "Woodleigh",</p>
+<p>  "wifi_password": "2008198399",</p>
+<p>  "ntp_server": "pool.ntp.org",</p>
+<p>  "weather_city": "Basingstoke",</p>
+<p>  "weather_region": "uk",</p>
+<p>  "weather_enabled": true,</p>
+<p>  "whatsapp_enabled": true,</p>
+<p>  "gas_meter_enabled": false,</p>
+<p>  "debug_level": 2,</p>
+<p>  "main_cycle_ms": 5000,</p>
+<p>  "weather_update_ms": 600000,</p>
+<p>  "health_check_ms": 60000,</p>
+<p>  "ota_username": "SteveG",</p>
+<p>  "ota_password": "W00dle1gh"</p>
+<p>}</p>
+<p><code>`</code></p>
+<h3 style='mso-style-name:"Heading 3"'>7.2 Configuration Parameters</h3>
+<table border='1' style='border-collapse:collapse'>
+<tr><th style='background:#DDD;padding:4px'>Parameter</th><th style='background:#DDD;padding:4px'>Type</th><th style='background:#DDD;padding:4px'>Default</th><th style='background:#DDD;padding:4px'>Description</th></tr>
+<tr><td style='padding:4px'>wifi_ssid</td><td style='padding:4px'>String</td><td style='padding:4px'>"Woodleigh"</td><td style='padding:4px'>WiFi network name (SSID)</td></tr>
+<tr><td style='padding:4px'>wifi_password</td><td style='padding:4px'>String</td><td style='padding:4px'>"2008198399"</td><td style='padding:4px'>WiFi password (WPA/WPA2)</td></tr>
+<tr><td style='padding:4px'>ntp_server</td><td style='padding:4px'>String</td><td style='padding:4px'>"pool.ntp.org"</td><td style='padding:4px'>NTP time server address</td></tr>
+<tr><td style='padding:4px'>weather_city</td><td style='padding:4px'>String</td><td style='padding:4px'>"Basingstoke"</td><td style='padding:4px'>City name for weather data</td></tr>
+<tr><td style='padding:4px'>weather_region</td><td style='padding:4px'>String</td><td style='padding:4px'>"uk"</td><td style='padding:4px'>Country/region code (ISO 3166)</td></tr>
+<tr><td style='padding:4px'>weather_enabled</td><td style='padding:4px'>Boolean</td><td style='padding:4px'>true</td><td style='padding:4px'>Enable/disable weather fetching</td></tr>
+<tr><td style='padding:4px'>whatsapp_enabled</td><td style='padding:4px'>Boolean</td><td style='padding:4px'>true</td><td style='padding:4px'>Enable/disable notifications</td></tr>
+<tr><td style='padding:4px'>gas_meter_enabled</td><td style='padding:4px'>Boolean</td><td style='padding:4px'>false</td><td style='padding:4px'>Legacy config key (runtime gas feature disabled)</td></tr>
+<tr><td style='padding:4px'>debug_level</td><td style='padding:4px'>Integer</td><td style='padding:4px'>2</td><td style='padding:4px'>0=none, 1=errors, 2=info, 3=verbose</td></tr>
+<tr><td style='padding:4px'>main_cycle_ms</td><td style='padding:4px'>Integer</td><td style='padding:4px'>5000</td><td style='padding:4px'>Data sampling interval (milliseconds)</td></tr>
+<tr><td style='padding:4px'>weather_update_ms</td><td style='padding:4px'>Integer</td><td style='padding:4px'>600000</td><td style='padding:4px'>Weather API query (10 minutes)</td></tr>
+<tr><td style='padding:4px'>health_check_ms</td><td style='padding:4px'>Integer</td><td style='padding:4px'>60000</td><td style='padding:4px'>System health check (1 minute)</td></tr>
+<tr><td style='padding:4px'>ota_username</td><td style='padding:4px'>String</td><td style='padding:4px'>"SteveG"</td><td style='padding:4px'>OTA firmware update login</td></tr>
+<tr><td style='padding:4px'>ota_password</td><td style='padding:4px'>String</td><td style='padding:4px'>"W00dle1gh"</td><td style='padding:4px'>OTA firmware update password</td></tr>
+</table>
+<h3 style='mso-style-name:"Heading 3"'>7.3 Gas Meter Configuration</h3>
+<p>Gas monitoring is currently disabled in runtime logic.</p>
+<li>The **gas_meter_enabled** key is retained for configuration compatibility.</li>
+<li>CSV structure remains unchanged for historical file compatibility.</li>
+<li>Runtime gas tracking and active gas monitoring behavior are disabled.</li>
+<p><b>Note:</b> You can keep this key in config.json; it is currently informational.</p>
+<h3 style='mso-style-name:"Heading 3"'>7.4 Modifying Configuration</h3>
+<p><b>Web-Based Method (Recommended):</b></p>
+<p>1. Navigate to <code>http://<ESP32_IP>/ConfigUpload</code></p>
+<p>2. Click <b>"Download config.json"</b> to download current configuration to your PC</p>
+<p>3. Edit the file on your PC using any text editor (Notepad, VS Code, etc.)</p>
+<p>4. Maintain valid JSON format (proper quotes, commas, brackets)</p>
+<p>5. Return to <code>http://<ESP32_IP>/ConfigUpload</code></p>
+<p>6. Click <b>"Choose File"</b> and select your edited config.json</p>
+<p>7. Click <b>"Upload and Reboot"</b></p>
+<p>8. System will:</p>
+<p>   - Validate the file (checks for required fields: wifi_ssid, wifi_password)</p>
+<p>   - Backup old config to <code>config_backup.json</code></p>
+<p>   - Install new configuration</p>
+<p>   - Reboot automatically to apply changes</p>
+<p><b>Manual SD Card Method (If ESP32 Not Accessible):</b></p>
+<p>1. Power off ESP32</p>
+<p>2. Remove SD card and insert into computer</p>
+<p>3. Open <code>/config.json</code> with text editor</p>
+<p>4. Edit values (maintain valid JSON format!)</p>
+<p>5. Save file</p>
+<p>6. Safely eject SD card</p>
+<p>7. Reinsert into ESP32</p>
+<p>8. Power on (new config loaded automatically)</p>
+<p><b>Important Notes:</b></p>
+<li>If config.json is missing or corrupted, the system creates a new default config.json automatically</li>
+<li>Old configuration is backed up to `config_backup.json` when using web upload</li>
+<li>Invalid configurations will be rejected with error message</li>
+<li>ESP32 reboots automatically after successful upload to apply new settings</li>
+<h2 style='mso-style-name:"Heading 2"'>8. KWS-AC301L Protocol</h2>
+<p><b>MODBUS RTU Communication:</b></p>
+<li>Baud: 9600, 8N1</li>
+<li>Slave Address: 0x02</li>
+<li>Function: 0x03 (Read Holding Registers)</li>
+<p><b>8 Active Commands (Lines 560-569):</b></p>
+<table border='1' style='border-collapse:collapse'>
+<tr><th style='background:#DDD;padding:4px'>Register</th><th style='background:#DDD;padding:4px'>Command</th><th style='background:#DDD;padding:4px'>Data</th><th style='background:#DDD;padding:4px'>Units</th><th style='background:#DDD;padding:4px'>Purpose</th></tr>
+<tr><td style='padding:4px'>0x0E</td><td style='padding:4px'>Voltage</td><td style='padding:4px'>Ã·10</td><td style='padding:4px'>V</td><td style='padding:4px'>Line voltage</td></tr>
+<tr><td style='padding:4px'>0x0F</td><td style='padding:4px'>Current</td><td style='padding:4px'>Ã·1000</td><td style='padding:4px'>A</td><td style='padding:4px'>Current draw</td></tr>
+<tr><td style='padding:4px'>0x11</td><td style='padding:4px'>Power</td><td style='padding:4px'>Ã·10</td><td style='padding:4px'>W</td><td style='padding:4px'>Active power</td></tr>
+<tr><td style='padding:4px'>0x19</td><td style='padding:4px'>Uptime</td><td style='padding:4px'>Ã—1</td><td style='padding:4px'>min</td><td style='padding:4px'>Operating time</td></tr>
+<tr><td style='padding:4px'>0x17</td><td style='padding:4px'>Energy</td><td style='padding:4px'>Ã·1000</td><td style='padding:4px'>kWh</td><td style='padding:4px'>Cumulative energy</td></tr>
+<tr><td style='padding:4px'>0x1D</td><td style='padding:4px'>PF</td><td style='padding:4px'>Ã·100</td><td style='padding:4px'>0-1</td><td style='padding:4px'>Power factor</td></tr>
+<tr><td style='padding:4px'>0x1E</td><td style='padding:4px'>Freq</td><td style='padding:4px'>Ã·10</td><td style='padding:4px'>Hz</td><td style='padding:4px'>Line frequency</td></tr>
+<tr><td style='padding:4px'>0x1A</td><td style='padding:4px'>Temp</td><td style='padding:4px'>Ã—1</td><td style='padding:4px'>Â°C</td><td style='padding:4px'>Sensor temp</td></tr>
+</table>
+<p><b>Reset Capability:</b> âŒ NOT IMPLEMENTED. KWS_Protocol.h shows write password (0x00) exists but no web interface for resetting energy counter. Would require password unlock + write command implementation.</p>
+<h2 style='mso-style-name:"Heading 2"'>9. Data Flow and Storage</h2>
+<p><b>Daily Files:</b> <code>DF_YYYYMMDD.csv</code> (created at midnight)</p>
+<p><b>Monthly Files:</b> <code>MF_MM.csv</code> (auto-created 1st of month)</p>
+<p><b>CSV Format (20 fields):</b></p>
+<p><code>`</code></p>
+<p>Date,Time,V1,V2,V3,A1,A2,A3,Eff Temp,Wattage,KWH,Hz,Pwr Factor,Time Stamp,Weather Temp,Feels Like,Max Temp,Min Temp,Pressure,Humidity,Wind Speed,Direction,Gas Volume</p>
+<p><code>`</code></p>
+<p><b>Sampling:</b> Every 5 seconds = ~17,280 records/day</p>
+<p><b>Month-End Process:</b></p>
+<p>1. Midnight on 1st triggers consolidation</p>
+<p>2. All daily files merged into MF_MM.csv</p>
+<p>3. Daily files auto-deleted</p>
+<p>4. WhatsApp notifications sent</p>
+<p>5. ~50MB space freed per month</p>
+<h2 style='mso-style-name:"Heading 2"'>10. Function Reference</h2>
+<p><b>Core Functions:</b></p>
+<li>`setup()` - Initialize all subsystems</li>
+<li>`loop()` - Event handler + timing</li>
+<li>`main_programme()` - Data acquisition cycle (every 5 sec)</li>
+<li>`Send_Request()` - RS485 transmit</li>
+<li>`Receive()` - RS485 receive + parse</li>
+<li>`Write_New_Data_Record_to_Data_Files()` - Append CSV</li>
+<li>`Create_New_Data_File()` - New daily file</li>
+<li>`ZipAllFilesToSD()` - Monthly consolidation</li>
+<li>`Send_WhatsApp_Message()` - Notifications</li>
+<li>`Get_Time()` - NTP sync</li>
+<li>`Get_Weather()` - API fetch</li>
+<p><b>Web Handlers:</b></p>
+<li>`i_Display()` - Main dashboard</li>
+<li>`i_Information()` - System info</li>
+<li>`i_Download_Files()` - File list</li>
+<li>`i_Delete_Files()` - File management</li>
+<li>`i_Web_Reset()` - Remote reboot</li>
+<li>`i_WhatsApp()` - Test message</li>
+<li>`get_loginIndex()` - OTA login (dynamic)</li>
+<h2 style='mso-style-name:"Heading 2"'>11. WhatsApp Integration</h2>
+<p><b>CallMeBot API Configuration:</b></p>
+<li>Phone: +447785938200</li>
+<li>API Key: 8876034</li>
+<li>Endpoint: https://api.callmebot.com/whatsapp.php</li>
+<p><b>Hardcoded</b> (Lines 1843-1845) - NOT in config.json</p>
+<p><b>Auto Notifications:</b></p>
+<li>System boot/reboot</li>
+<li>SD card errors</li>
+<li>File creation</li>
+<li>Month-end process</li>
+<li>WiFi failures</li>
+<li>Low disk space</li>
+<li>Write errors</li>
+<p><b>Deduplication:</b> Blocks identical messages within 5 minutes (Issue #13)</p>
+<p><b>To Change:</b> Edit source code, rebuild firmware (future: add to config.json)</p>
+<h2 style='mso-style-name:"Heading 2"'>12. Weather Integration</h2>
+<p><b>OpenWeatherMap API:</b></p>
+<li>City: Basingstoke, UK (configurable in config.json)</li>
+<li>API Key: 917ddeff21dff2cfc5e57717f809d6ad</li>
+<li>Endpoint: http://api.openweathermap.org/data/2.5/weather</li>
+<li>Update: Every 10 minutes (configurable)</li>
+<p><b>Data Fields:</b> Temperature, feels like, min/max, pressure, humidity, wind speed/direction</p>
+<p><b>Disable:</b> Set <code>weather_enabled: false</code> in config.json</p>
+<h2 style='mso-style-name:"Heading 2"'>13. Troubleshooting</h2>
+<p><b>Won't Boot:</b> Check power supply (5V 1A), USB cable, try re-flash</p>
+<p><b>No WiFi:</b> Verify SSID/password in config.json, use 2.4GHz network, check signal strength</p>
+<p><b>No SD Card:</b> Format as FAT32, use 4-32GB card, check insertion, verify SPI wiring</p>
+<p><b>No Data Logging:</b> Check RS485 connections (A/B), verify KWS meter powered, check baud rate</p>
+<p><b>WhatsApp Fails:</b> Verify phone/API key in code (lines 1843-1845), check internet, test with /WhatsApp button</p>
+<p><b>OTA Fails:</b> Verify credentials (config.json), rebuild firmware (<code>pio run</code>), check WiFi signal</p>
+<p><b>Debug:</b> Set <code>debug_level: 3</code> in config.json for verbose console logging (115200 baud)</p>
+<h2 style='mso-style-name:"Heading 2"'>14. Advanced Operations</h2>
+<h3 style='mso-style-name:"Heading 3"'>KWS Meter Reset</h3>
+<p><b>Status:</b> âŒ NOT CURRENTLY AVAILABLE</p>
+<p><b>Research:</b> KWS_Protocol.h shows write password register (0x00, command 0x37) exists, suggesting write capability for resetting energy counters, but:</p>
+<li>No web interface implemented</li>
+<li>No write functions coded</li>
+<li>Requires password unlock sequence</li>
+<li>Needs thorough testing</li>
+<li>May violate metering regulations</li>
+<p><b>To Implement:</b> Would need unlock function + MODBUS write command + web route + safety confirmations</p>
+<h3 style='mso-style-name:"Heading 3"'>Remote Access</h3>
+<p><b>Options:</b></p>
+<p>1. Port forwarding (simple, less secure)</p>
+<p>2. VPN (recommended - WireGuard/OpenVPN)</p>
+<p>3. Cloud tunnel (ngrok, Cloudflare Tunnel)</p>
+<h3 style='mso-style-name:"Heading 3"'>Data Analysis</h3>
+<p>Download CSV files via /DownloadFiles, analyze in Excel or Python:</p>
+<p><code>`</code>python</p>
+<p>import pandas as pd</p>
+<p>df = pd.read_csv('DF_20251230.csv')</p>
+<p>daily_kwh = df['KWH'].iloc[-1] - df['KWH'].iloc[0]</p>
+<p>print(f"Daily: {daily_kwh:.2f} kWh")</p>
+<p><code>`</code></p>
+<h3 style='mso-style-name:"Heading 3"'>Backup Strategy</h3>
+<li>Monthly: Download MF_XX.csv files</li>
+<li>Quarterly: Backup config.json</li>
+<li>Annually: Save .pio folder</li>
+<h2 style='mso-style-name:"Heading 2"'>Quick Reference Card</h2>
+<p><code>`</code></p>
+<p>SERIAL:     115200 baud (console), 9600 baud (RS485)</p>
+<p>WEB:        http://<ESP32_IP>/</p>
+<p>OTA:        /Firmware â†’ SteveG / W00dle1gh</p>
+<p>BUILD:      cd Power_Monitor; pio run</p>
+<p>FIRMWARE:   .pio\build\esp32da\firmware.bin</p>
+<p>CONFIG:     /config.json on SD card</p>
+<p>WHATSAPP:   +447785938200 (hardcoded)</p>
+<p>WEATHER:    Basingstoke, UK (config.json)</p>
+<p>SAMPLING:   5 seconds (config.json: main_cycle_ms)</p>
+<p>CSV FORMAT: 20 fields, ~17,280 records/day</p>
+<p><code>`</code></p>
+<p><b>End of Technical User Guide V1.1.1</b></p>
+</body></html>

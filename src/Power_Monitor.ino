@@ -143,10 +143,10 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
-#define VERSION_MINOR 1   // Backwards-compatible functionality additions
-#define VERSION_PATCH 1   // Backwards-compatible bug fixes
-// 15/04/2026  1.1.1 Y-axis dynamic linear scaling for improved 2-30A range detail; gas feature fully removed (runtime disabled, UI cleaned, CSV format preserved)
-#define VERSION_STRING "V1.1.1"
+#define VERSION_MINOR 3   // Backwards-compatible functionality additions
+#define VERSION_PATCH 3   // Backwards-compatible bug fixes
+// 09/05/2026  1.3.3 Web UI/graph/UK date/time fixes
+#define VERSION_STRING "V1.3.3"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -519,7 +519,7 @@ Data_Record_Union Concatenation_Data_Record;
 int Data_Table_Pointer = 0;          // points to the next index of Data_Table
 //int Month_Table_Pointer = 0;
 int Data_Record_Count = 0;           // running total of records written to Data Table
-constexpr char Data_Table_Size = 60;
+constexpr int Data_Table_Size = 180;
 constexpr int Month_Table_Size = (24 * 31);
 struct Data_Table_Record {
     char ldate[11];                 //  [0 - 10]  date record was taken
@@ -543,12 +543,13 @@ struct Data_Table_Record {
     char weather_description[20];   //  [84 - 103]
     double gas_volume;              //  [104 - 107]
 }__attribute__((packed));
-constexpr int Data_Table_Record_Length = 108;
+constexpr int Data_Table_Record_Length = sizeof(Data_Table_Record);
 union Data_Table_Union {
     Data_Table_Record field;
-    unsigned int characters[Data_Table_Record_Length];
+    char characters[Data_Table_Record_Length];
 };
 Data_Table_Union Readings_Table[Data_Table_Size];
+Data_Table_Union Prefill_Scratch_Record;
 int Wattage_Readings_Count = 0;
 /// ConcatenationFile Constants and Variables -------------
 String ZipFileName = "M202501";                     // file name of the created zip file (all the previous months dailt files, ready to be downloaded
@@ -840,6 +841,18 @@ bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
 }
 
 /**
+ * @brief Feed watchdog timer only when it is initialized
+ *
+ * Guards against null timer handle access during startup phases where long-running
+ * code may execute before watchdog setup is complete.
+ */
+inline void FeedWatchdogSafely() {
+    if (Timer0_Cfg != NULL) {
+        timerWrite(Timer0_Cfg, 0);
+    }
+}
+
+/**
  * @brief Smart delay that maintains system responsiveness
  * 
  * Delays for the specified duration while continuously feeding the watchdog timer,
@@ -857,7 +870,7 @@ bool nonBlockingDelay(unsigned long &lastTime, unsigned long interval) {
 void smartDelay(unsigned long ms) {
     unsigned long start = millis();
     while (millis() - start < ms) {
-        timerWrite(Timer0_Cfg, 0);  // Reset watchdog timer
+        FeedWatchdogSafely();       // Reset watchdog timer when available
         server.handleClient();       // Handle web requests
         yield();                     // Allow ESP32 background tasks
     }
@@ -2121,38 +2134,102 @@ void Check_SD_Space() {
         Send_WhatsApp_Message("Power Monitor - SD Space Critical " + String(SD.usedBytes() / 1000000) + " MBytes used");
     }
 }
-void Add_New_Data_Record_to_Display_Table() {
-    if (Data_Table_Pointer == Data_Table_Size) {                                        // table full, shuffle fifo
-        Shuffle_Data_Table();
-        Data_Table_Pointer = Data_Table_Size - 1;       // subsequent records will be added at the end of the table
+
+int GetMinuteKeyFromTimeString(const char* time_text) {
+    int hour = -1;
+    int minute = -1;
+    int second = -1;
+
+    if (sscanf(time_text, "%d:%d:%d", &hour, &minute, &second) != 3) {
+        if (sscanf(time_text, "%d,%d,%d", &hour, &minute, &second) != 3) {
+            return -1;
+        }
     }
+
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return -1;
+    }
+
+    return (hour * 60) + minute;
+}
+
+void NormalizeTimeTextToMinute(char* time_text, size_t time_text_size) {
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+
+    if (sscanf(time_text, "%d:%d:%d", &hour, &minute, &second) == 3 ||
+        sscanf(time_text, "%d,%d,%d", &hour, &minute, &second) == 3) {
+        snprintf(time_text, time_text_size, "%02d:%02d:00", hour, minute);
+    }
+}
+
+void Add_New_Data_Record_to_Display_Table() {
+    // Aggregate all 5-second readings that share the same HH:MM into one display point.
+    static double amperage_sum = 0.0;
+    static int sample_count = 0;
+    static int active_minute_key = -1;
+    static Data_Table_Union pending_display_record;
+
+    int sample_minute_key = GetMinuteKeyFromTimeString(Current_Data_Record.field.ltime);
+    if (sample_minute_key < 0) {
+        return;
+    }
+
+    if (active_minute_key < 0) {
+        active_minute_key = sample_minute_key;
+    }
+
+    if (sample_minute_key != active_minute_key) {
+        if (sample_count > 0) {
+            pending_display_record.field.Amperage = amperage_sum / sample_count;
+            NormalizeTimeTextToMinute(pending_display_record.field.ltime, sizeof(pending_display_record.field.ltime));
+
+            if (Data_Table_Pointer == Data_Table_Size) {                                        // table full, shuffle fifo
+                Shuffle_Data_Table();
+                Data_Table_Pointer = Data_Table_Size - 1;       // subsequent records will be added at the end of the table
+            }
+
+            Readings_Table[Data_Table_Pointer] = pending_display_record;
+            Data_Table_Pointer++;
+        }
+
+        amperage_sum = 0.0;
+        sample_count = 0;
+        active_minute_key = sample_minute_key;
+    }
+
+    // Keep the latest row details for this minute bucket; amperage becomes minute-average on emit.
     for (int x = 0; x < 11; x++) {
-        Readings_Table[Data_Table_Pointer].field.ldate[x] = Current_Data_Record.field.ldate[x];        // [0]  Date
+        pending_display_record.field.ldate[x] = Current_Data_Record.field.ldate[x];
     }
     for (int x = 0; x < 9; x++) {
-        Readings_Table[Data_Table_Pointer].field.ltime[x] = Current_Data_Record.field.ltime[x];        // [1]  time
+        pending_display_record.field.ltime[x] = Current_Data_Record.field.ltime[x];
     }
-    Readings_Table[Data_Table_Pointer].field.Voltage = Current_Data_Record.field.Voltage;           // [2]  Voltage
-    Readings_Table[Data_Table_Pointer].field.Amperage = Current_Data_Record.field.Amperage;        // [3]  Amperage
-    Readings_Table[Data_Table_Pointer].field.wattage = Current_Data_Record.field.wattage;           // [4]  wattage
-    Readings_Table[Data_Table_Pointer].field.uptime = Current_Data_Record.field.uptime;              // [5]  uptime
-    Readings_Table[Data_Table_Pointer].field.kilowatthour = Current_Data_Record.field.kilowatthour;// [6] kilowatthours
-    Readings_Table[Data_Table_Pointer].field.powerfactor = Current_Data_Record.field.powerfactor;// [7]  power factor
-    Readings_Table[Data_Table_Pointer].field.frequency = Current_Data_Record.field.frequency;     // [8]  frequency
-    Readings_Table[Data_Table_Pointer].field.sensor_temperature = Current_Data_Record.field.sensor_temperature;      // [9] sensor temperature
-    Readings_Table[Data_Table_Pointer].field.weather_temperature = Current_Data_Record.field.weather_temperature;    // [10] weather temperature
-    Readings_Table[Data_Table_Pointer].field.temperature_feels_like = Current_Data_Record.field.temperature_feels_like;// [11] temperature feels like
-    Readings_Table[Data_Table_Pointer].field.temperature_maximum = Current_Data_Record.field.temperature_maximum;    // [12] temperature maximum
-    Readings_Table[Data_Table_Pointer].field.temperature_minimum = Current_Data_Record.field.temperature_minimum;    // [13] temperature minimum
-    Readings_Table[Data_Table_Pointer].field.atmospheric_pressure = Current_Data_Record.field.atmospheric_pressure;  // [14] atmospheric pressure
-    Readings_Table[Data_Table_Pointer].field.relative_humidity = Current_Data_Record.field.relative_humidity;        // [15] relative humidity
-    Readings_Table[Data_Table_Pointer].field.wind_speed = Current_Data_Record.field.wind_speed;                      // [16] wind speed
-    Readings_Table[Data_Table_Pointer].field.weather_temperature = Current_Data_Record.field.weather_temperature;    // [17] wind direction
-    for (int x = 0; x < strlen(Current_Data_Record.field.weather_description); x++) {
-        Readings_Table[Data_Table_Pointer].field.weather_description[x] = Current_Data_Record.field.weather_description[x];
-    }
-    Readings_Table[Data_Table_Pointer].field.gas_volume = Current_Data_Record.field.gas_volume;                      // [19] gas volume
-    Data_Table_Pointer++;
+    pending_display_record.field.Voltage = Current_Data_Record.field.Voltage;
+    pending_display_record.field.Amperage = Current_Data_Record.field.Amperage;
+    pending_display_record.field.wattage = Current_Data_Record.field.wattage;
+    pending_display_record.field.uptime = Current_Data_Record.field.uptime;
+    pending_display_record.field.kilowatthour = Current_Data_Record.field.kilowatthour;
+    pending_display_record.field.powerfactor = Current_Data_Record.field.powerfactor;
+    pending_display_record.field.frequency = Current_Data_Record.field.frequency;
+    pending_display_record.field.sensor_temperature = Current_Data_Record.field.sensor_temperature;
+    pending_display_record.field.weather_temperature = Current_Data_Record.field.weather_temperature;
+    pending_display_record.field.temperature_feels_like = Current_Data_Record.field.temperature_feels_like;
+    pending_display_record.field.temperature_maximum = Current_Data_Record.field.temperature_maximum;
+    pending_display_record.field.temperature_minimum = Current_Data_Record.field.temperature_minimum;
+    pending_display_record.field.atmospheric_pressure = Current_Data_Record.field.atmospheric_pressure;
+    pending_display_record.field.relative_humidity = Current_Data_Record.field.relative_humidity;
+    pending_display_record.field.wind_speed = Current_Data_Record.field.wind_speed;
+    pending_display_record.field.wind_direction = Current_Data_Record.field.wind_direction;
+    pending_display_record.field.gas_volume = Current_Data_Record.field.gas_volume;
+    strncpy(pending_display_record.field.weather_description,
+            Current_Data_Record.field.weather_description,
+            sizeof(pending_display_record.field.weather_description) - 1);
+    pending_display_record.field.weather_description[sizeof(pending_display_record.field.weather_description) - 1] = '\0';
+
+    amperage_sum += Current_Data_Record.field.Amperage;
+    sample_count++;
 }
 void Create_or_Open_New_Data_File() {
     Update_Current_Timeinfo();
@@ -2464,73 +2541,73 @@ double Parse_CSV_Field_Double(int field_number, char* field) {
  * @param field Pointer to the CSV field string to process
  * 
  * @note Refactored in V12.27 to eliminate code duplication
- * @note Updates Readings_Table[Data_Table_Pointer] with parsed values
+ * @note Updates prefill scratch record with parsed values
  * @see Parse_CSV_Field_String(), Parse_CSV_Field_Double(), Prefill_Data_Array()
  */
 void Process_Prefill_Field(int field_number, char* field) {
     switch (field_number) {
     case 0: // Date
-        Parse_CSV_Field_String(field_number, field, Readings_Table[Data_Table_Pointer].field.ldate, 
-                               sizeof(Readings_Table[Data_Table_Pointer].field.ldate));
+        Parse_CSV_Field_String(field_number, field, Prefill_Scratch_Record.field.ldate,
+                               sizeof(Prefill_Scratch_Record.field.ldate));
         break;
     case 1: // Time
-        Parse_CSV_Field_String(field_number, field, Readings_Table[Data_Table_Pointer].field.ltime, 
-                               sizeof(Readings_Table[Data_Table_Pointer].field.ltime));
+        Parse_CSV_Field_String(field_number, field, Prefill_Scratch_Record.field.ltime,
+                               sizeof(Prefill_Scratch_Record.field.ltime));
         break;
     case 2: // Voltage
-        Readings_Table[Data_Table_Pointer].field.Voltage = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.Voltage = Parse_CSV_Field_Double(field_number, field);
         break;
     case 3: // Amperage
-        Readings_Table[Data_Table_Pointer].field.Amperage = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.Amperage = Parse_CSV_Field_Double(field_number, field);
         break;
     case 4: // Wattage
-        Readings_Table[Data_Table_Pointer].field.wattage = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.wattage = Parse_CSV_Field_Double(field_number, field);
         break;
     case 5: // Uptime
-        Readings_Table[Data_Table_Pointer].field.uptime = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.uptime = Parse_CSV_Field_Double(field_number, field);
         break;
     case 6: // Kilowatthour
-        Readings_Table[Data_Table_Pointer].field.kilowatthour = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.kilowatthour = Parse_CSV_Field_Double(field_number, field);
         break;
     case 7: // Power factor
-        Readings_Table[Data_Table_Pointer].field.powerfactor = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.powerfactor = Parse_CSV_Field_Double(field_number, field);
         break;
     case 8: // Frequency
-        Readings_Table[Data_Table_Pointer].field.frequency = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.frequency = Parse_CSV_Field_Double(field_number, field);
         break;
     case 9: // Sensor temperature
-        Readings_Table[Data_Table_Pointer].field.sensor_temperature = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.sensor_temperature = Parse_CSV_Field_Double(field_number, field);
         break;
     case 10: // Weather temperature
-        Readings_Table[Data_Table_Pointer].field.weather_temperature = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.weather_temperature = Parse_CSV_Field_Double(field_number, field);
         break;
     case 11: // Temperature feels like
-        Readings_Table[Data_Table_Pointer].field.temperature_feels_like = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.temperature_feels_like = Parse_CSV_Field_Double(field_number, field);
         break;
     case 12: // Temperature maximum
-        Readings_Table[Data_Table_Pointer].field.temperature_maximum = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.temperature_maximum = Parse_CSV_Field_Double(field_number, field);
         break;
     case 13: // Temperature minimum
-        Readings_Table[Data_Table_Pointer].field.temperature_minimum = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.temperature_minimum = Parse_CSV_Field_Double(field_number, field);
         break;
     case 14: // Atmospheric pressure
-        Readings_Table[Data_Table_Pointer].field.atmospheric_pressure = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.atmospheric_pressure = Parse_CSV_Field_Double(field_number, field);
         break;
     case 15: // Relative humidity
-        Readings_Table[Data_Table_Pointer].field.relative_humidity = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.relative_humidity = Parse_CSV_Field_Double(field_number, field);
         break;
     case 16: // Wind speed
-        Readings_Table[Data_Table_Pointer].field.wind_speed = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.wind_speed = Parse_CSV_Field_Double(field_number, field);
         break;
     case 17: // Wind direction
-        Readings_Table[Data_Table_Pointer].field.wind_direction = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.wind_direction = Parse_CSV_Field_Double(field_number, field);
         break;
     case 18: // Gas volume
-        Readings_Table[Data_Table_Pointer].field.gas_volume = Parse_CSV_Field_Double(field_number, field);
+        Prefill_Scratch_Record.field.gas_volume = Parse_CSV_Field_Double(field_number, field);
         break;
     case 19: // Weather description
-        Parse_CSV_Field_String(field_number, field, Readings_Table[Data_Table_Pointer].field.weather_description, 
-                               sizeof(Readings_Table[Data_Table_Pointer].field.weather_description));
+        Parse_CSV_Field_String(field_number, field, Prefill_Scratch_Record.field.weather_description,
+                               sizeof(Prefill_Scratch_Record.field.weather_description));
         break;
     default:
         break;
@@ -2557,59 +2634,125 @@ void Process_Prefill_Field(int field_number, char* field) {
  * @see Parse_CSV_Field_String(), Parse_CSV_Field_Double(), Process_Prefill_Field()
  */
 void Prefill_Data_Array() {
+    // Group all raw rows by HH:MM and emit one averaged point per minute.
+
     int character_count = 0;
     char field[50];
     int field_number = 0;
     char data_temp;
-    String message;
-    unsigned long last_led_toggle = millis();  // Track last LED toggle time
-    toggleLED(Blue_led_pin);                          // flash the blue led
+    unsigned long last_led_toggle = millis();
+    unsigned long last_wdt_feed = millis();
+
+    // Running aggregation for the current minute bucket
+    double sum_A = 0;
+    int    bucket_count = 0;
+    int    current_bucket_key = -1;
+    Data_Table_Union bucket_latest_record = {};
+    int    write_slot   = 0;  // next display slot to receive an averaged result
+    memset(&Prefill_Scratch_Record, 0, sizeof(Prefill_Scratch_Record));
+
+    toggleLED(Blue_led_pin);
     console_print("Pre Loading DataFile " + String(DataFileName) + " into Data Array");
     File DataFile = SD.open("/" + DataFileName, FILE_READ);
     if (DataFile) {
-        while (DataFile.available()) {                                 // throw the first row, column headers, away
+        while (DataFile.available()) {                                 // skip header row
             data_temp = DataFile.read();
             if (data_temp == '\n') break;
         }
-        while (DataFile.available()) {                                       // do while there are data available
-            // Toggle LED every 2.5 seconds during prefill
+        while (DataFile.available()) {
+            if (millis() - last_wdt_feed >= 250) {
+                FeedWatchdogSafely();
+                last_wdt_feed = millis();
+                yield();
+            }
             if (millis() - last_led_toggle >= 2500) {
                 toggleLED(Blue_led_pin);
                 last_led_toggle = millis();
             }
             data_temp = DataFile.read();
-            field[character_count++] = data_temp;                        // add it to the csvfield string
-            if (data_temp == ',' || data_temp == '\n') {                              // look for end of field
-                field[character_count - 1] = '\0';       // insert termination character where the ',' or '\n' was
-                Process_Prefill_Field(field_number, field);  // Use helper function (Issue #15)
+            field[character_count++] = data_temp;
+            if (data_temp == ',' || data_temp == '\n') {
+                field[character_count - 1] = '\0';
+                Process_Prefill_Field(field_number, field);
                 field_number++;
                 field[0] = '\0';
                 character_count = 0;
             }
-            if (data_temp == '\n') {               // at this point the obtained record has been saved in the table
-                Update_Webpage_Variables_from_Table(Data_Table_Pointer); // update web variables with record just saved
-                Data_Table_Pointer++;                                          // increment the table array pointer
-                Data_Record_Count++;                                          // increment the running record total
-                if (Data_Table_Pointer == Data_Table_Size) {               // if pointer is greater than table size
-                    Shuffle_Data_Table();
-                    Data_Table_Pointer = Data_Table_Size - 1;
-                }
+            if (data_temp == '\n') {
+                Data_Record_Count++;
                 field_number = 0;
-            } // end of end of line detected
-        } // end of while
+                int row_bucket_key = GetMinuteKeyFromTimeString(Prefill_Scratch_Record.field.ltime);
+
+                if (row_bucket_key >= 0) {
+                    if (current_bucket_key < 0) {
+                        current_bucket_key = row_bucket_key;
+                    }
+
+                    if (row_bucket_key != current_bucket_key && bucket_count > 0) {
+                        if (write_slot >= Data_Table_Size) {
+                            for (int i = 0; i < Data_Table_Size - 1; i++) {
+                                memcpy(&Readings_Table[i], &Readings_Table[i + 1], sizeof(Data_Table_Union));
+                                if ((i & 0x1F) == 0) {
+                                    FeedWatchdogSafely();
+                                }
+                            }
+                            write_slot = Data_Table_Size - 1;
+                        }
+
+                        Readings_Table[write_slot] = bucket_latest_record;
+                        Readings_Table[write_slot].field.Amperage = sum_A / bucket_count;
+                        NormalizeTimeTextToMinute(Readings_Table[write_slot].field.ltime, sizeof(Readings_Table[write_slot].field.ltime));
+                        Update_Webpage_Variables_from_Table(write_slot);
+                        write_slot++;
+
+                        sum_A = 0;
+                        bucket_count = 0;
+                        current_bucket_key = row_bucket_key;
+                    }
+
+                    sum_A += Prefill_Scratch_Record.field.Amperage;
+                    bucket_count++;
+                    bucket_latest_record = Prefill_Scratch_Record;
+                }
+
+                memset(&Prefill_Scratch_Record, 0, sizeof(Prefill_Scratch_Record));
+            } // end of newline handling
+        } // end of while DataFile.available
+
+        // Flush any remaining partial bucket
+        if (bucket_count > 0) {
+            if (write_slot >= Data_Table_Size) {
+                for (int i = 0; i < Data_Table_Size - 1; i++) {
+                    memcpy(&Readings_Table[i], &Readings_Table[i + 1], sizeof(Data_Table_Union));
+                    if ((i & 0x1F) == 0) {
+                        FeedWatchdogSafely();
+                    }
+                }
+                write_slot = Data_Table_Size - 1;
+            }
+            // Flush partial bucket: latest row with averaged current usage.
+            Readings_Table[write_slot] = bucket_latest_record;
+            Readings_Table[write_slot].field.Amperage = sum_A / bucket_count;
+            NormalizeTimeTextToMinute(Readings_Table[write_slot].field.ltime, sizeof(Readings_Table[write_slot].field.ltime));
+            Update_Webpage_Variables_from_Table(write_slot);
+            write_slot++;
+        }
     }
     else {
         console_print("ERROR: Failed to open " + String(DataFileName) + " for prefill");
     }
     DataFile.close();
-    console_print("Loaded Data Records: " + String(Data_Record_Count));
-    console_print("Data_Table_Pointer now at: " + String(Data_Table_Pointer));
+    Data_Table_Pointer = write_slot;
+    console_print("Loaded Raw Rows: " + String(Data_Record_Count) + ", Display Slots: " + String(Data_Table_Pointer) + " (1-minute timestamp buckets)");
     if (Data_Table_Pointer == 0) {
         console_print("NOTE: No data loaded - webpage will display 'Waiting for data' until first sensor reading");
     }
 }
 void Shuffle_Data_Table() {
     for (int i = 0; i < (Data_Table_Size - 1); i++) {       // shuffle the rows up, losing row 0, make row [table_size] free
+        if ((i & 0x1F) == 0) {
+            FeedWatchdogSafely();
+        }
         strncpy(Readings_Table[i].field.ldate, Readings_Table[i + 1].field.ldate, sizeof(Readings_Table[i].field.ldate));                       // [0]  date
         strncpy(Readings_Table[i].field.ltime, Readings_Table[i + 1].field.ltime, sizeof(Readings_Table[i].field.ltime));                       // [1]  time
         Readings_Table[i].field.Voltage = Readings_Table[i + 1].field.Voltage;                          // Voltage
@@ -2730,10 +2873,39 @@ void Page_Footer() {
 void i_Display() {
     double maximum_Amperage = 0;
     int non_zero_count = 0;
+    bool first_graph_row = true;
     console_print("Web Display of Graph Requested via Webpage");
     webpage = "";
     webpage.reserve(8000);  // Pre-allocate for graph data
-    Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
+    // Format date as DD/MM/YYYY for UK display
+    int year = 0, month = 0, day = 0;
+    char uk_date[16];
+    bool formatted = false;
+    if (sscanf(Current_Date_With.c_str(), "%d/%d/%d", &year, &month, &day) == 3) {
+        // Already in DD/MM/YYYY
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    } else if (sscanf(Current_Date_With.c_str(), "%d-%d-%d", &year, &month, &day) == 3) {
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    } else if (sscanf(Current_Date_With.c_str(), "%d/%d/%d", &month, &day, &year) == 3) {
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    } else if (sscanf(Current_Date_With.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    } else if (sscanf(Current_Date_With.c_str(), "%d/%d/%d", &year, &month, &day) == 3) {
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    } else if (sscanf(Current_Date_With.c_str(), "%d-%d-%d", &year, &month, &day) == 3) {
+        snprintf(uk_date, sizeof(uk_date), "%02d/%02d/%04d", day, month, year);
+        formatted = true;
+    }
+    if (formatted) {
+        Page_Header(true, String("Energy Usage Monitor ") + String(uk_date) + " " + String(Current_Time_With));
+    } else {
+        Page_Header(true, "Energy Usage Monitor " + String(Current_Date_With) + " " + String(Current_Time_With));
+    }
     
     // Check if we have any data to display
     if (Data_Table_Pointer == 0) {
@@ -2790,7 +2962,7 @@ void i_Display() {
         webpage += F("var all_data = null;");
         webpage += F("var windowSize = 20;");
         webpage += F("var options = {");
-        webpage += F("title:'Electrical Consumption logarithmic scale',");
+        webpage += F("title:'Electrical Consumption linear scale',");
         webpage += F("titleTextStyle:{");
         webpage += F("fontName:'Arial',");
         webpage += F("fontSize: 20, ");
@@ -2806,7 +2978,6 @@ void i_Display() {
         webpage += F("slantedText:true,");
         webpage += F("slantedTextAngle:90,");
         webpage += F("titleTextStyle:{color:'Purple',bold:true,fontSize:16},");
-        webpage += F("format:'HH:mm:ss',");
         webpage += F("gridlines:{color:'#333'},");
         webpage += F("showTextEvery:1");
         webpage += F("},");
@@ -2817,37 +2988,53 @@ void i_Display() {
         webpage += F("google.setOnLoadCallback(drawChart);");
         webpage += F("function drawChart() {");
         webpage += F("var data=new google.visualization.DataTable();");
-        webpage += F("data.addColumn('datetime', 'Time');");
+        webpage += F("data.addColumn('string', 'Time');");
         webpage += F("data.addColumn('number', 'Amperage');");
         webpage += F("data.addRows([");
         for (int i = 0; i < (Data_Table_Pointer); i++) {
             if (String(Readings_Table[i].field.ltime) != "") {                     // if the ltime field contains data
-                for (int x = 0; x < 8; x++) {                                    // replace the ":"s in ltime with ","
-                    if (Readings_Table[i].field.ltime[x] == ':') {
-                        Readings_Table[i].field.ltime[x] = ',';
-                    }
+                int hour = 0;
+                int minute = 0;
+                int second = 0;
+                if (sscanf(Readings_Table[i].field.ltime, "%d:%d:%d", &hour, &minute, &second) != 3 &&
+                    sscanf(Readings_Table[i].field.ltime, "%d,%d,%d", &hour, &minute, &second) != 3) {
+                    continue;
                 }
-                webpage += "[new Date(2000,0,1,";
-                webpage += String(Readings_Table[i].field.ltime) + "),";
-                webpage += String(Readings_Table[i].field.Amperage, 1) + "]";
+
+                char minute_label[6];
+                snprintf(minute_label, sizeof(minute_label), "%02d:%02d", hour, minute);
+
+                if (!first_graph_row) {
+                    webpage += ",";
+                }
+                first_graph_row = false;
+
+                webpage += "['";
+                webpage += String(minute_label);
+                webpage += "',";
+                webpage += String(Readings_Table[i].field.Amperage, 1);
+                webpage += "]";
                 if (Readings_Table[i].field.Amperage > maximum_Amperage) {
                     maximum_Amperage = Readings_Table[i].field.Amperage;
-                }
-                if (i != Data_Table_Pointer) {
-                    webpage += ",";
                 }
             }
         }
         webpage += F("]);");
         webpage += F("all_data = data;");
-        webpage += F("windowSize = Math.max(20, Math.ceil(data.getNumberOfRows() / 3));");
+        webpage += F("windowSize = Math.min(20, data.getNumberOfRows());");
         webpage += F("chart = new google.visualization.LineChart(document.getElementById('line_chart'));");
-        webpage += F("updateChart(0);");
+        webpage += F("var maxStart = Math.max(0, all_data.getNumberOfRows() - windowSize);");
+        webpage += F("var slider = document.getElementById('time_slider');");
+        webpage += F("if(slider) {");
+        webpage += F("slider.max = maxStart;");
+        webpage += F("slider.value = maxStart;");
+        webpage += F("}");
+        webpage += F("updateChart(maxStart);");
         webpage += F("}");
         webpage += F("function updateChart(startIndex) {");
         webpage += F("if(!all_data || all_data.getNumberOfRows() === 0) return;");
         webpage += F("var maxStart = Math.max(0, all_data.getNumberOfRows() - windowSize);");
-        webpage += F("startIndex = Math.min(startIndex, maxStart);");
+        webpage += F("startIndex = Math.max(0, Math.min(startIndex, maxStart));");
         webpage += F("var endIndex = Math.min(startIndex + windowSize, all_data.getNumberOfRows());");
         webpage += F("var windowData = all_data.clone();");
         webpage += F("if(endIndex < all_data.getNumberOfRows()) {");
@@ -2857,10 +3044,12 @@ void i_Display() {
         webpage += F("windowData.removeRows(0, startIndex);");
         webpage += F("}");
         webpage += F("if(windowData.getNumberOfRows() > 0) {");
-        webpage += F("var firstTime = windowData.getValue(0, 0);");
-        webpage += F("var lastTime = windowData.getValue(windowData.getNumberOfRows()-1, 0);");
-        webpage += F("document.getElementById('slider_time').innerText = firstTime.toLocaleTimeString() + ' to ' + lastTime.toLocaleTimeString();");
+        webpage += F("var firstTime = all_data.getValue(0, 0);");
+        webpage += F("var lastTime = all_data.getValue(all_data.getNumberOfRows()-1, 0);");
+        webpage += F("document.getElementById('slider_time').innerText = 'Full data span: ' + firstTime + ' to ' + lastTime;");
         webpage += F("}");
+        webpage += F("var gridCount = Math.max(2, Math.min(windowData.getNumberOfRows(), 20));");
+        webpage += F("options.hAxis.gridlines.count = gridCount;");
         webpage += F("chart.draw(windowData, options);");
         webpage += F("}");
         webpage += F("document.addEventListener('DOMContentLoaded', function() {");
@@ -2873,11 +3062,12 @@ void i_Display() {
         webpage += F("});");
         webpage += F("</script>");
         webpage += F("<p style='color:#555; font-size:14px; margin-bottom:8px;'>Drag the slider left to see older data, right to see newer data.</p>");
+        webpage += F("<p style='color:#555; font-size:13px; margin-top:0; margin-bottom:10px;'>Each graph point is a 1-minute average from twelve 5-second readings.</p>");
         webpage += F("<div style='width:960px; margin-top:12px;'>");
         webpage += F("<input type='range' id='time_slider' min='0' max='");
         webpage += String(Data_Table_Pointer > 20 ? Data_Table_Pointer - 20 : 0);
         webpage += F("' value='0' style='width:100%; height:6px; border-radius:3px; background:#DDD; outline:none; -webkit-appearance:slider-horizontal; cursor:pointer;'>");
-        webpage += F("<div id='slider_time' style='text-align:center; color:#666; font-size:12px; margin-top:4px;'>--:--:-- to --:--:--</div>");
+        webpage += F("<div id='slider_time' style='text-align:center; color:#666; font-size:12px; margin-top:4px;'>Full data span: --:--:-- to --:--:--</div>");
         webpage += F("</div>");
         webpage += F("<div id='line_chart' style='width:960px; height:600px; margin-top:8px;'></div>");
         }  // End of valid data check
@@ -3688,10 +3878,7 @@ void Check_Yellow_Switch() {
     }
 }
 void Clear_Arrays() {                                                       // clear the web arrays of old records
-    for (int x = 0; x < Data_Table_Size; x++) {
-        for (int y = 0; y < Data_Table_Record_Length; y++)
-            Readings_Table[x].characters[y] = '0';
-    }
+    memset(Readings_Table, 0, sizeof(Readings_Table));
     Data_Table_Pointer = 0;
     for (int x = 0; x < Data_Record_Length; x++) {
         Current_Data_Record.character[x] = 0;

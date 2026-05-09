@@ -1,6 +1,6 @@
 # Power Monitor - Semantic Versioning Guide
 
-## Current Version: V1.0.0
+## Current Version: V1.3.3
 
 Starting from December 30, 2025, this project uses **Semantic Versioning (SemVer)** to clearly communicate the nature and impact of changes in each release.
 
@@ -72,9 +72,9 @@ Legacy versioning using V12.X format. See changelog in Power_Monitor.ino for det
 ### Code Constants
 ```cpp
 #define VERSION_MAJOR 1   // Breaking changes
-#define VERSION_MINOR 0   // New features
-#define VERSION_PATCH 0   // Bug fixes
-#define VERSION_STRING "V1.0.0"
+#define VERSION_MINOR 3   // New features
+#define VERSION_PATCH 2   // Bug fixes
+#define VERSION_STRING "V1.3.2"
 ```
 
 ### Helper Function
@@ -110,7 +110,7 @@ String get_version_string() {
    #define VERSION_PATCH Z
    #define VERSION_STRING "VX.Y.Z"
    ```
-3. Update changelog in Power_Monitor.ino header
+3. Update `CHANGELOG.md` with a new release section
 4. Build and verify: `pio run`
 5. Commit: `git commit -m "VX.Y.Z - Description"`
 6. Tag: `git tag -a vX.Y.Z -m "Description"`
@@ -133,6 +133,6 @@ String get_version_string() {
 
 For version-related questions, check:
 - This document (VERSIONING.md)
-- Changelog in Power_Monitor.ino header
+- CHANGELOG.md (project release history)
 - Git tags: `git tag -l -n9` to see all tagged versions with notes
 - Code_Review_Recommendations.txt for implementation details

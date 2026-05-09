@@ -1,3 +1,10 @@
+## [1.3.3] - 2026-05-09
+
+### Changed
+- Web UI x-axis now uses stable minute labels (categorical, not datetime) for correct tick spacing at all slider positions
+- Vertical gridlines restored for all visible windows
+- Web page banner now shows UK date format (DD/MM/YYYY) with time at end
+
 # Changelog
 
 All notable changes to the Power Monitor project will be documented in this file.

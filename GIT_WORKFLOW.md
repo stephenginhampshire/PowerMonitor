@@ -7,20 +7,20 @@ After each successful build (`pio run`), create a versioned commit:
 ### Option 1: Using the Helper Script (Recommended)
 
 ```powershell
-.\git-release.ps1 "12.28" "Weather API timeout handling improved"
+.\git-release.ps1 "1.3.3" "Brief description of changes"
 ```
 
 ### Option 2: Manual Commands
 
 ```powershell
 # 1. Stage source files
-git add src/ platformio.ini Code_Review_Recommendations.txt
+git add src/ platformio.ini CHANGELOG.md VERSIONING.md
 
 # 2. Create commit with changelog entry
-git commit -m "V12.28 - Weather API timeout handling improved"
+git commit -m "V1.3.3 - Brief description of changes"
 
 # 3. Tag the version
-git tag -a v12.28 -m "V12.28 - Weather API timeout handling improved"
+git tag -a v1.3.3 -m "V1.3.3 - Brief description of changes"
 
 # 4. Push to remote (optional)
 git push origin main --tags
@@ -28,13 +28,15 @@ git push origin main --tags
 
 ## Version Numbering
 
-Follow the existing pattern:
-- **Major.Minor format**: `12.27`, `12.28`, etc.
-- Increment minor version for each change
+Follow semantic versioning:
+- **MAJOR.MINOR.PATCH** format: `1.3.2`, `1.3.3`, etc.
+- Increment MAJOR for breaking changes
+- Increment MINOR for backwards-compatible features
+- Increment PATCH for backwards-compatible fixes
 - Keep version in sync with:
-  - `src/Power_Monitor.ino` line ~76: `String version = "V12.27";`
-  - Changelog in `src/Power_Monitor.ino` lines 30-56
-  - `Code_Review_Recommendations.txt` header
+  - `src/Power_Monitor.ino` `VERSION_MAJOR`, `VERSION_MINOR`, `VERSION_PATCH`, `VERSION_STRING`
+  - `CHANGELOG.md` latest entry
+  - `VERSIONING.md` current version section
 
 ## What Gets Committed
 
@@ -61,26 +63,26 @@ git log --oneline -10
 git tag --sort=-version:refname
 
 # View specific version
-git show v12.27
+git show v1.3.2
 
 # Compare versions
-git diff v12.26 v12.27
+git diff v1.3.1 v1.3.2
 ```
 
 ## Rollback if Needed
 
 ```powershell
 # Revert to previous version
-git checkout v12.26
+git checkout v1.3.1
 
 # Create branch from old version
-git checkout -b bugfix-from-12.26 v12.26
+git checkout -b bugfix-from-1.3.1 v1.3.1
 
 # Return to latest
 git checkout main
 ```
 
-## Current Version: V12.27
+## Current Version: V1.3.2
 
 Last successful build: December 30, 2025
 - RAM: 24.5% (80,184 bytes)

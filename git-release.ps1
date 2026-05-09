@@ -1,5 +1,5 @@
 # Git Release Helper Script
-# Usage: .\git-release.ps1 "12.28" "Description of changes"
+# Usage: .\git-release.ps1 "1.3.3" "Description of changes"
 
 param(
     [Parameter(Mandatory=$true)]
