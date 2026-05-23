@@ -1,3 +1,16 @@
+## [1.3.4] - 2026-05-23
+
+### Added
+- Persisted software reboot detail across restart using EEPROM (written before intentional reboot, read once on next boot)
+- ESP32 hardware reset-cause mapping for reboot diagnostics (POWERON, SOFTWARE, WATCHDOG, BROWNOUT, etc.)
+
+### Changed
+- Reboot WhatsApp notification now uses compact structured format:
+  - `cause=<esp_reset_reason>`
+  - `detail=<stored app reboot reason>` when available
+  - `web=<device URL/hostname block>`
+- Centralized most software-triggered restarts through a single reboot helper so reason capture is consistent
+
 ## [1.3.3] - 2026-05-09
 
 ### Changed

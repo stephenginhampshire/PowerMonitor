@@ -85,6 +85,7 @@ Change Record
 06/01/2026  1.0.18 RS485 RE pin logic - Attempted fix for receiver enable pin (reverted in next version due to module-specific behavior)
 06/01/2026  1.0.19 Critical RS485 receive fix - Changed Receive() function to initialize required_bytes to 9 instead of 0, preventing premature loop exit after 1 byte (was causing all sensor readings to be zero and blank webpage)
 06/01/2026  1.1.0 Major milestone - RS485 communication fully functional after critical bug fixes (versions 1.0.12-1.0.19), removed debug output for production readiness, Blue LED toggles every 2.5s during CSV prefill to differentiate from normal 5s operation cycle
+23/05/2026  1.3.4 Reboot diagnostics improved - reboot WhatsApp now includes hardware reset cause and persisted software reboot detail
 
 SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 - MAJOR: Increment for breaking changes (hardware incompatibility, config file format changes, API changes)
@@ -144,9 +145,9 @@ SEMANTIC VERSIONING GUIDE FOR FUTURE RELEASES:
 // Semantic Versioning (MAJOR.MINOR.PATCH) - Issue #27
 #define VERSION_MAJOR 1   // Incompatible API changes
 #define VERSION_MINOR 3   // Backwards-compatible functionality additions
-#define VERSION_PATCH 3   // Backwards-compatible bug fixes
-// 09/05/2026  1.3.3 Web UI/graph/UK date/time fixes
-#define VERSION_STRING "V1.3.3"
+#define VERSION_PATCH 4   // Backwards-compatible bug fixes
+// 23/05/2026  1.3.4 Reboot diagnostics and WhatsApp reboot message formatting improvements
+#define VERSION_STRING "V1.3.4"
 
 // Timing Constants (Issue #4 - Eliminate Magic Numbers)
 #define WDT_TiMEOUT 5                           // 5 second watchdog timeout
@@ -190,12 +191,14 @@ const String CONFIG_FILENAME = "/config.json";       // Configuration file on SD
 #include <HTTP_Method.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include <EEPROM.h>
 #include <stdio.h>
 #include <ArduinoSort.h>
 #include <HttpsOTAUpdate.h>
 #include <Update.h>
 #include <ESPmDNS.h>
 #include <UrlEncode.h>
+#include <esp_system.h>
 // -----------
 
 // ================================================================================
@@ -356,6 +359,19 @@ struct RuntimeConfig {
     String ota_password = "W00dle1gh";  // OTA firmware update password
 };
 RuntimeConfig config;
+
+// Reboot Reason Persistence (Issue #29)
+const int REBOOT_REASON_EEPROM_SIZE = 256;
+const int REBOOT_REASON_EEPROM_ADDR = 0;
+const uint32_t REBOOT_REASON_MAGIC = 0x5242534E; // 'RBSN'
+const size_t REBOOT_REASON_MAX_LEN = 96;
+struct RebootReasonRecord {
+    uint32_t magic;
+    char reason[REBOOT_REASON_MAX_LEN];
+};
+bool reboot_reason_store_ready = false;
+String last_reset_reason = "Unknown";
+String pending_reboot_reason = "";
 
 //constexpr int eeprom_size = 30;      // year = 4, month = 4, day = 4, hour = 4, minute = 4, second = 4e
 const char* host = "esp32";
@@ -795,6 +811,75 @@ void IRAM_ATTR resetModule() {
     ets_printf("Watchdog Timer Triggered - Rebooting\n");
     esp_restart();
 }
+
+String Get_Reset_Reason_Text(esp_reset_reason_t reason) {
+    switch (reason) {
+    case ESP_RST_POWERON: return "POWERON";
+    case ESP_RST_EXT: return "EXTERNAL_PIN";
+    case ESP_RST_SW: return "SOFTWARE";
+    case ESP_RST_PANIC: return "PANIC_EXCEPTION";
+    case ESP_RST_INT_WDT: return "INT_WATCHDOG";
+    case ESP_RST_TASK_WDT: return "TASK_WATCHDOG";
+    case ESP_RST_WDT: return "OTHER_WATCHDOG";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP_WAKE";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_SDIO: return "SDIO";
+    default: return "UNKNOWN";
+    }
+}
+
+bool Init_Reboot_Reason_Store() {
+    if (reboot_reason_store_ready) {
+        return true;
+    }
+
+    reboot_reason_store_ready = EEPROM.begin(REBOOT_REASON_EEPROM_SIZE);
+    return reboot_reason_store_ready;
+}
+
+void Save_Pending_Reboot_Reason(const String& reason) {
+    if (!Init_Reboot_Reason_Store()) {
+        return;
+    }
+
+    RebootReasonRecord record = {};
+    record.magic = REBOOT_REASON_MAGIC;
+    reason.substring(0, REBOOT_REASON_MAX_LEN - 1).toCharArray(record.reason, REBOOT_REASON_MAX_LEN);
+
+    EEPROM.put(REBOOT_REASON_EEPROM_ADDR, record);
+    EEPROM.commit();
+}
+
+String Load_Pending_Reboot_Reason() {
+    if (!Init_Reboot_Reason_Store()) {
+        return "";
+    }
+
+    RebootReasonRecord record = {};
+    EEPROM.get(REBOOT_REASON_EEPROM_ADDR, record);
+    if (record.magic != REBOOT_REASON_MAGIC) {
+        return "";
+    }
+
+    record.reason[REBOOT_REASON_MAX_LEN - 1] = '\0';
+    return String(record.reason);
+}
+
+void Clear_Pending_Reboot_Reason() {
+    if (!Init_Reboot_Reason_Store()) {
+        return;
+    }
+
+    RebootReasonRecord record = {};
+    EEPROM.put(REBOOT_REASON_EEPROM_ADDR, record);
+    EEPROM.commit();
+}
+
+void Reboot_System(const String& reason) {
+    Save_Pending_Reboot_Reason(reason);
+    console_print("Restarting CPU. Reason: " + reason);
+    ESP.restart();
+}
 // setup -----
 //------------
 
@@ -929,8 +1014,19 @@ void setup() {
     console.begin(console_Baudrate);                                        // enable the console
     while (!console);                                                       // wait for port to settle
     delay(STARTUP_DELAY_MS);
+
+    Init_Reboot_Reason_Store();
+    last_reset_reason = Get_Reset_Reason_Text(esp_reset_reason());
+    pending_reboot_reason = Load_Pending_Reboot_Reason();
+    if (pending_reboot_reason.length() > 0) {
+        Clear_Pending_Reboot_Reason();
+    }
     
     console_print("\n\nPower Monitor System Starting...");
+    console_print("ESP Reset Reason: " + last_reset_reason);
+    if (pending_reboot_reason.length() > 0) {
+        console_print("Previous reboot detail: " + pending_reboot_reason);
+    }
     console_print(get_version_string());
     
     // Gas sensor feature disabled: keep CSV field format but hold runtime value at zero.
@@ -1138,7 +1234,7 @@ void setup() {
             console_print("SD Drive Begin Failed after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - SD Drive Begin Failed after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
             delay(5000);
-            ESP.restart();
+            Reboot_System("SD init failed after retries");
         }
         else {
             console_print("SD Drive Begin Succeeded");
@@ -1159,7 +1255,7 @@ void setup() {
                 console_print("No SD Card Found after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
                 Send_WhatsApp_Message("Power Monitor - No SD Card Found after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
                 delay(5000);
-                ESP.restart();
+                Reboot_System("SD card not detected after retries");
             }
             String card;
             if (cardType == CARD_MMC) {
@@ -1293,7 +1389,7 @@ void loop() {
         console_print("Main Process Now Running");
         Once = true;
         digitalWrite(Green_led_pin, HIGH);
-        Send_WhatsApp_Message("Power Monitor - System Rebooted " + Standard_Format_Date_Time + " | " + Get_Web_Interface_Address());
+        Send_WhatsApp_Message(Build_Reboot_WhatsApp_Message());
     }
     if (ota_reboot_pending && millis() >= ota_reboot_time) {
         if (ota_whatsapp_pending) {
@@ -1301,7 +1397,7 @@ void loop() {
             Send_WhatsApp_Message("Power Monitor - Firmware Updated Successfully - Rebooting");
         }
         console_print("OTA reboot timer elapsed - restarting now");
-        ESP.restart();
+        Reboot_System("OTA firmware update applied");
     }
     timerWrite(Timer0_Cfg, 0);                                      // Reset watchdog timer
     Check_WiFi();                                                   // check that the WiFi is still connected
@@ -2034,7 +2130,7 @@ void Write_New_Data_Record_to_Data_Files() {
         DEBUG_ERROR("Error re-opening DataFile:" + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
         Send_WhatsApp_Message("Power Monitor - Error re-opening DataFile: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
         smartDelay(5000);
-        ESP.restart();
+        Reboot_System("Data file append open failed: " + String(DataFileName));
     }
     console_print("New Data Record Written to " + DataFileName);
     
@@ -2091,7 +2187,7 @@ void Write_New_Data_Record_to_Data_Files() {
         DataFile.close();
         Send_WhatsApp_Message("Power Monitor - Data write verification failed - " + DataFileName);
         smartDelay(2000);
-        ESP.restart();
+        Reboot_System("Data write verification failed: " + DataFileName);
     }
     
     DataFile.close();
@@ -2251,7 +2347,7 @@ void Create_or_Open_New_Data_File() {
             DEBUG_ERROR("Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - Error creating Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
             smartDelay(5000);
-            ESP.restart();
+            Reboot_System("Data file create failed: " + String(DataFileName));
         }
         console_print("Day Data File " + DataFileName + " created");
         
@@ -2268,7 +2364,7 @@ void Create_or_Open_New_Data_File() {
             DataFile.close();
             Send_WhatsApp_Message("Power Monitor - Header write failed - " + DataFileName);
             smartDelay(2000);
-            ESP.restart();
+            Reboot_System("Data file header write failed: " + DataFileName);
         }
         
         console_print("Column Headings written to Day Data File");
@@ -2294,7 +2390,7 @@ void Create_or_Open_New_Data_File() {
             console_print("Error reopening Data file: " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Rebooting in 5 seconds");
             Send_WhatsApp_Message("Power Monitor - Error reopening Data File " + String(DataFileName) + " after " + String(SD_RETRY_ATTEMPTS) + " attempts - Automatic Reboot");
             smartDelay(5000);
-            ESP.restart();
+            Reboot_System("Data file reopen failed: " + String(DataFileName));
         }
         console_print("Day Data File " + DataFileName + " reopened for append");
         DataFile.close();
@@ -2366,7 +2462,7 @@ void Check_WiFi() {
                 console_print("Network Error, WiFi lost >60 seconds, Restarting Processor");
                 Send_WhatsApp_Message("Power Monitor - WiFi Recovery Failed - Automatic Reboot");
                 smartDelay(2000);
-                ESP.restart();
+                Reboot_System("WiFi recovery failed for >60 seconds");
             }
             
             StartWiFi(SSID, Password);
@@ -2424,7 +2520,7 @@ int StartWiFi(String ssid, String password) {
         console_print("Connection attempt " + String(wifi_connection_attempts));
         if (wifi_connection_attempts++ > 20) {
             console_print("Network Error, Not able to open WiFi, Restarting Processor");
-            ESP.restart();
+            Reboot_System("Initial WiFi connection failed");
         }
     }
     WiFi_Status = WiFi.status();
@@ -2451,6 +2547,24 @@ String Get_Web_Interface_Address() {
 
     return webAddress;
 }
+
+String Build_Reboot_WhatsApp_Message() {
+    String message = "Power Monitor rebooted " + Standard_Format_Date_Time;
+    message += " | cause=" + last_reset_reason;
+
+    if (pending_reboot_reason.length() > 0) {
+        message += " | detail=" + pending_reboot_reason;
+    }
+
+    String webAddress = Get_Web_Interface_Address();
+    if (webAddress.startsWith("Web: ")) {
+        webAddress = webAddress.substring(5);
+    }
+    message += " | web=" + webAddress;
+
+    return message;
+}
+
 String Build_Device_Hostname() {
     uint32_t suffix = (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF);
     char hostnameBuffer[32];
@@ -3095,7 +3209,7 @@ void i_Web_Reset() {
         Send_WhatsApp_Message("Power Monitor - Resetting Processor from Webpage at " + String(Current_Time_With));
     }
     Page_Footer();
-    ESP.restart();
+    Reboot_System("User requested reboot from web page");
 }
 void i_Config_Upload() {
     console_print("Config Upload Page Requested via Webpage");
@@ -3220,7 +3334,7 @@ void i_Upload_Config_Complete() {
     
     console_print("Rebooting to apply new configuration...");
     smartDelay(3000);
-    ESP.restart();
+    Reboot_System("Configuration upload applied");
 }
 void i_Information() {                                                    // Display file size of the datalog file
     console_print("Web Display of information Requested via Webpage");
@@ -3864,7 +3978,7 @@ void Check_Red_Switch(String message) {
     console_print("Fatal Error: " + message + " - Automatic reboot in 5 seconds");
     Send_WhatsApp_Message("Power Monitor - Fatal Error Detected - " + message + " - Automatic Reboot");
     smartDelay(5000);  // Allow time for message to be sent (keeps system responsive)
-    ESP.restart();
+    Reboot_System("Fatal error: " + message);
 }
 void Check_Yellow_Switch() {
     Yellow_Switch.update();
@@ -3902,7 +4016,7 @@ void Update_Current_Timeinfo() {
             if (connection_attempts > 20) {
                 console_print("Time Network Error, Restarting");
                 Send_WhatsApp_Message("Power Monitor - Time Network Error, Restarting");
-                ESP.restart();
+                Reboot_System("NTP sync failed while reading local time");
             }
         }
         return;  // Exit early, try again next call
@@ -3951,7 +4065,7 @@ void Update_Current_Timeinfo() {
         DEBUG_ERROR("NTP time validation failed: " + validation_error);
         Send_WhatsApp_Message("Power Monitor - Invalid NTP time received: " + validation_error + " - Restarting");
         smartDelay(2000);
-        ESP.restart();
+        Reboot_System("Invalid NTP time: " + validation_error);
     }
     
     // DATE --

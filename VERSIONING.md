@@ -1,6 +1,6 @@
 # Power Monitor - Semantic Versioning Guide
 
-## Current Version: V1.3.3
+## Current Version: V1.3.4
 
 Starting from December 30, 2025, this project uses **Semantic Versioning (SemVer)** to clearly communicate the nature and impact of changes in each release.
 
@@ -73,8 +73,8 @@ Legacy versioning using V12.X format. See changelog in Power_Monitor.ino for det
 ```cpp
 #define VERSION_MAJOR 1   // Breaking changes
 #define VERSION_MINOR 3   // New features
-#define VERSION_PATCH 2   // Bug fixes
-#define VERSION_STRING "V1.3.2"
+#define VERSION_PATCH 4   // Bug fixes
+#define VERSION_STRING "V1.3.4"
 ```
 
 ### Helper Function
